@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
     EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    MemoryStore, FAST_CHANNELS
+    MemoryStore, SensitizationStore, FAST_CHANNELS
 )
 
 
@@ -123,7 +123,7 @@ def create_kokomi():
     bl = kokomi_personality.baseline()
     for ch, val in bl.items():
         setattr(state, ch.value, val)
-    return EmotionEngine(state=state, personality=kokomi_personality, memory=MemoryStore())
+    return EmotionEngine(state=state, personality=kokomi_personality, memory=MemoryStore(), scars=SensitizationStore())
 
 
 # ═══════════════════════════════════════════════

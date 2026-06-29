@@ -453,6 +453,7 @@ class EmotionEngine:
     state:       EmotionalState
     personality: Personality
     memory:      MemoryStore
+    scars:       SensitizationStore
     events_today:       int = 0
     positive_events:    int = 0
     _last_saga:         float = field(default_factory=time.time)
@@ -561,6 +562,20 @@ class EmotionEngine:
         if appraisal is not None:
             raw = appraise(appraisal)
             gated = gate_appraisal(raw, self.state.trust, self.state.love)
+
+            # Step 3.5: 触发敏感化——旧伤疤放大负面情绪
+            scar_shift = self.scars.get_shift(appraisal)
+            if scar_shift > 0.01 and appraisal.goal_conduciveness < 0:
+                for ch in (Channel.SADNESS, Channel.FEAR, Channel.ANGER):
+                    if ch in gated and gated[ch] > 0.01:
+                        gated[ch] *= (1.0 + scar_shift)  # 旧伤疤让负面放大 0~60%
+
+            # 登记触发 / 正面反例
+            tag = self.scars.detect(appraisal)
+            if tag and appraisal.goal_conduciveness < 0:
+                self.scars.register(tag, now)
+            elif tag and appraisal.goal_conduciveness > 0:
+                self.scars.register_positive(tag)
 
             for ch in FAST_CHANNELS:
                 if ch in gated and gated[ch] > 0.01:
@@ -684,6 +699,89 @@ class EmotionEngine:
             "memory":         mem_stats,
             "atmosphere":     round(self.atmosphere, 3),
         }
+
+
+# ══════════════════════════════════════════════════════
+# v0.4 触发敏感化（Kindling + 贝叶斯威胁模型）
+# ══════════════════════════════════════════════════════
+# 论文依据:
+#   - Kindling (Post 1992, Kendler 2000): 重复事件降低触发阈值
+#   - 杏仁核贝叶斯模型 (MindLAB 2024): 威胁信号 5× 权重, 修复需 6-18 月
+#   - 去情境化恐惧 (Neudert 2024): 恐惧泛化到安全情境
+
+@dataclass
+class SensitizationPattern:
+    """一个被敏感的触发模式——重复经历形成的'旧伤疤'。"""
+    tag:         str                     # 模式标签: "cold_shoulder", "betrayal", "criticism"
+    trigger_count: int = 0              # 触发了多少次
+    threshold_shift: float = 0.0        # 门槛降了多少 (0=正常, >0=过度敏感)
+    last_triggered: float = 0.0         # 上次触发时间
+    positive_counter: int = 0           # 正面反例计数（30 次才能复位）
+
+
+class SensitizationStore:
+    """管理角色所有'旧伤疤'。不是人格——是经历刻下的反应模式。"""
+
+    def __init__(self):
+        self.patterns: Dict[str, SensitizationPattern] = {}
+
+    def detect(self, appraisal: "Appraisal") -> Optional[str]:
+        """检测当前事件是否匹配已知模式或应该形成新模式。
+        返回标签（如果匹配）或 None（如果新类型事件）。
+        """
+        gc = appraisal.goal_conduciveness
+        oa = appraisal.other_agency
+        se = appraisal.social_evaluation
+
+        # 分类当前事件
+        if gc < -0.3 and oa > 0.5:
+            return "social_hurt"         # 别人伤害了我
+        elif gc < -0.3 and oa < 0.3:
+            return "self_blame"          # 我搞砸了
+        elif se < -0.3 and oa > 0.3:
+            return "criticism"           # 被当众评价
+        elif gc < 0 and oa > 0.7:
+            return "cold_shoulder"       # 被冷落/忽视
+        return None
+
+    def register(self, tag: str, now: float):
+        """登记一次触发。重复 3 次 → 敏感化开始。"""
+        if tag not in self.patterns:
+            self.patterns[tag] = SensitizationPattern(tag=tag)
+
+        p = self.patterns[tag]
+        p.trigger_count += 1
+        p.last_triggered = now
+        p.positive_counter = 0  # 重置——新的触发打破了修复进程
+
+        # Kindling: 第 3 次开始降门槛，之后每次再降
+        if p.trigger_count >= 3:
+            excess = p.trigger_count - 2
+            p.threshold_shift = min(0.6, excess * 0.08)  # 单次门槛降 8%, 最大降 60%
+
+    def register_positive(self, tag: str):
+        """正面反例——修复进程。5 次正面抵消 1 次负面 (5:1 贝叶斯权重)"""
+        if tag in self.patterns:
+            p = self.patterns[tag]
+            p.positive_counter += 1
+            # 30 次正面反例完全复位 (对应论文 6-18 个月修复期)
+            if p.positive_counter >= 30 and p.threshold_shift > 0:
+                p.threshold_shift = max(0.0, p.threshold_shift - 0.1)
+                p.positive_counter = 0
+
+    def get_shift(self, appraisal: "Appraisal") -> float:
+        """返回此事件应被放大多少（因为旧伤疤）。
+        返回 0.0 ~ 0.6——越高越敏感。
+        """
+        tag = self.detect(appraisal)
+        if tag and tag in self.patterns:
+            return self.patterns[tag].threshold_shift
+        return 0.0
+
+    def all_scars(self) -> Dict[str, float]:
+        """返回所有旧伤疤及其敏感化程度。"""
+        return {tag: p.threshold_shift for tag, p in self.patterns.items()
+                if p.threshold_shift > 0.01}
 
 
 # ══════════════════════════════════════════════════════
@@ -867,7 +965,7 @@ if __name__ == "__main__":
     for ch, val in bl.items():
         setattr(state, ch.value, val)
 
-    engine = EmotionEngine(state=state, personality=pers, memory=MemoryStore())
+    engine = EmotionEngine(state=state, personality=pers, memory=MemoryStore(), scars=SensitizationStore())
 
     print("=== 初始状态 ===")
     for k, v in state.to_dict().items():
