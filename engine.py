@@ -359,6 +359,9 @@ def gate_appraisal(raw_activation: Dict[Channel, float],
             gated[ch] = val * sadness_gate
         elif ch == Channel.DISGUST:
             gated[ch] = val * disgust_gate
+            # 低信任+高正面评价 → 厌恶（"你喜欢的是我的面具"）
+            if trust < 0.3 and raw_activation.get(Channel.JOY, 0) > 0.3:
+                gated[ch] += (0.3 - trust) * 0.6
         elif ch == Channel.JOY:
             gated[ch] = val * joy_boost * joy_trust_gate  # trust 打折正面
         else:
@@ -396,6 +399,7 @@ def appraise(app: Appraisal) -> Dict[Channel, float]:
         Channel.ANGER:    -gc * app.other_agency * cp if gc < 0 else 0.0,
         Channel.FEAR:     -gc * gr * (1.0 - cp) * ue if gc < 0 else 0.0,
         Channel.DISGUST:  -app.social_evaluation * app.other_agency if app.social_evaluation < 0 else 0.0,
+        # 低信任+高正面评价 → 厌恶（"你说喜欢我？你喜欢的只是面具吧"）
         Channel.SURPRISE: ue * gr,
         Channel.GUILT:    -gc * gr * self_agency if gc < 0 and self_agency > 0.3 else 0.0,
         # 愧疚 = 坏事发生了 + 是我的责任（自己造成的）
@@ -1342,7 +1346,7 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
         data = json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 80,
+            "max_tokens": 50,
             "temperature": 0.7,
         }).encode("utf-8")
 
