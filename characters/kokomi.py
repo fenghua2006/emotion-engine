@@ -142,27 +142,20 @@ if __name__ == "__main__":
     def show(label, result):
         print(f"\n-- {label} --")
         s = result["state"]
-        print(f"  joy={s['joy']:.2f}  sadness={s['sadness']:.2f}  "
-              f"anger={s['anger']:.2f}  fear={s['fear']:.2f}")
-        print(f"  love={s['love']:.2f}  trust={s['trust']:.2f}  "
-              f"disgust={s['disgust']:.2f}  surprise={s['surprise']:.2f}")
+        print(f"  joy={s['joy']:.2f} sad={s['sadness']:.2f} anger={s['anger']:.2f} fear={s['fear']:.2f}")
+        print(f"  love={s['love']:.2f} trust={s['trust']:.2f} longing={s.get('longing',0):.2f} guilt={s.get('guilt',0):.2f}")
         if result["blends"]:
             for b in result["blends"]:
-                label = {
-                    "joy+sadness": "[bittersweet]",
-                    "love+fear": "[fear of loss]",
-                }.get(b, f"[{b}]")
+                label = {"joy+sadness": "[bittersweet]", "love+fear": "[fear of loss]"}.get(b, f"[{b}]")
                 print(f"  {label}")
-        if result["shock_channels"]:
+        if result.get("shock_channels"):
             print(f"  !! shock: {result['shock_channels']}")
         if "memory" in result:
-            print(f"  mem: flash={result['memory']['flash_count']} "
-                  f"long={result['memory']['long_term_count']} "
-                  f"short={result['memory']['short_term_count']} "
-                  f"pending={result['memory']['pending_count']}")
+            print(f"  mem: f={result['memory']['flash_count']} l={result['memory']['long_term_count']} s={result['memory']['short_term_count']} p={result['memory']['pending_count']}")
+        if "atmosphere" in result:
+            print(f"  atmos: {result['atmosphere']}")
 
     def wait(minutes):
-        """模拟时间推移"""
         kokomi.state._last_update -= minutes * 60
 
     # 初始状态
@@ -170,27 +163,48 @@ if __name__ == "__main__":
 
     # 场景1: 正常工作日——制定作战计划
     show("Planning battle", kokomi.tick(kokomi_appraise("制定作战计划")))
-
-    # 过了 30 分钟
     wait(30)
     show("+30min decay", kokomi.tick())
 
-    # 场景2: 突然被要求公开演讲
+    # 场景2: 公开演讲（压力）
     show("Public speech", kokomi.tick(kokomi_appraise("公开演讲")))
-
-    # 过了 2 小时——害怕和紧张逐渐消退
     wait(120)
     show("+2hr decay", kokomi.tick())
 
-    # 场景3: 和旅行者独处（放松时刻）
+    # 场景3: 和旅行者独处
     show("With Traveler", kokomi.tick(kokomi_appraise("和旅行者独处")))
 
-    # 场景4: 部下牺牲——重击
-    show("Soldier lost", kokomi.tick(kokomi_appraise("部下牺牲")))
-
-    # 过了 3 小时——创伤还在但冲击感消退
+    # 场景4: 部下牺牲（别人造成的损失）→ social_hurt scar
+    show("Soldier lost #1", kokomi.tick(kokomi_appraise("部下牺牲")))
     wait(180)
     show("+3hr after loss", kokomi.tick())
 
     # 场景5: 独自读书恢复
     show("Reading alone", kokomi.tick(kokomi_appraise("独处读书")))
+
+    # === v0.4 新功能测试 ===
+
+    # 测试 longing: 模拟离线 24 小时后唤醒
+    print("\n=== v0.4: longing + sensitization ===")
+    wait(1440)  # 24 小时离线
+    wake_result = kokomi.wake()
+    print(f"  offline: {wake_result['offline_minutes']:.0f}min")
+    print(f"  longing after 24h away (love={kokomi.state.love:.2f}): {kokomi.state.longing:.3f}")
+    print(f"  compressed fast: anger={wake_result['compressed_fast']['anger']:.0f}eq_min fear={wake_result['compressed_fast']['fear']:.0f}eq_min")
+
+    # 测试 sensitization: 重复"部下牺牲" 3 次
+    show("Soldier lost #2", kokomi.tick(kokomi_appraise("部下牺牲")))
+    wait(60)
+    show("Soldier lost #3", kokomi.tick(kokomi_appraise("部下牺牲")))
+    wait(60)
+    show("Soldier lost #4 (scar)", kokomi.tick(kokomi_appraise("部下牺牲")))
+    # 第4次应该触发 kindling——old scar amplifies sad/fear/anger
+    scars = kokomi.scars.all_scars()
+    if scars:
+        print(f"  scars: {scars}")
+
+    # 测试 guilt: 心海意识到自己的决策失误导致部下牺牲
+    show("Guilt: my fault", kokomi.tick(Appraisal(
+        goal_relevance=1.0, goal_conduciveness=-0.7,
+        expectedness=0.3, other_agency=0.3,  # self_agency=0.7
+        coping_potential=0.2, social_evaluation=-0.5)))
