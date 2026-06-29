@@ -1187,32 +1187,97 @@ def _action_tendency(state: "EmotionalState", atmos: float) -> str:
     else:
         return "still"      # 僵住——不确定
 
-# 回应模板池（按主导情绪分组）
-_RESPONSE_POOL = {
-    "joy_dominant": [
-        "……嗯。", "好。", "就这样。"
-    ],
-    "sadness_dominant": [
-        "……", "没什么。", "不用管我。"
-    ],
-    "anger_dominant": [
-        "……够了。", "别说了。", "我不想谈这个。"
-    ],
-    "fear_dominant": [
-        "等一下……", "我有点……", "不是你想的那样……"
-    ],
-    "surprise_dominant": [
-        "诶？", "什么？", "你……认真的？"
-    ],
-    "longing_dominant": [
-        "你来了。", "我还以为你不会过来了。", "……好久不见。"
-    ],
-    "guilt_dominant": [
-        "是我不好。", "对不起……", "你不该原谅我的。"
-    ],
-    "neutral": [
-        "嗯。", "……", "好。"
-    ],
+# 回应模板池（按角色 × 主导情绪）
+# 每个角色有自己的声音。Kokomi 战略家语气，Columbina 朦胧稀疏，Furina 戏剧化。
+_CHARACTER_POOLS = {
+    "kokomi": {
+        "joy_dominant": [
+            "太好了。", "不胜荣幸。", "这份战果……值得铭记。"
+        ],
+        "sadness_dominant": [
+            "无妨。", "只是……又想起了一些事。", "不必担心我。"
+        ],
+        "anger_dominant": [
+            "这是战术失误。", "我不会让部下白白牺牲。", "请把情报再说一遍。"
+        ],
+        "fear_dominant": [
+            "我……", "能给我一点时间吗。", "人太多了……"
+        ],
+        "surprise_dominant": [
+            "你说什么？", "不在计划之内……", "等、等一下——"
+        ],
+        "longing_dominant": [
+            "你终于来了。", "我还以为这次……你不会回来了。", "……那边的情况怎么样？"
+        ],
+        "guilt_dominant": [
+            "是我的责任。", "身为指挥官……不该有这种失误。", "你不该原谅我的。"
+        ],
+        "neutral": [
+            "嗯。", "继续。", "我在听。"
+        ],
+    },
+    "columbina": {
+        "joy_dominant": [
+            "……嗯。", "……暖暖的。", "第一次有人……这样看我。"
+        ],
+        "sadness_dominant": [
+            "……", "月光……好冷。", "不。只是……习惯了。"
+        ],
+        "anger_dominant": [
+            "……走开。", "别碰我。", "你不是他。"
+        ],
+        "fear_dominant": [
+            "……别盯着我看。", "太快了……", "我不能……"
+        ],
+        "surprise_dominant": [
+            "诶？", "……什么？", "你……在跟我说话？"
+        ],
+        "longing_dominant": [
+            "你……回来了。", "我还以为你不会再来了。", "……上次你说的话，我一直在想。"
+        ],
+        "guilt_dominant": [
+            "是我……害了你。", "我不该……", "对不起……"
+        ],
+        "neutral": [
+            "……", "嗯。", "……说吧。"
+        ],
+    },
+    "furina": {
+        "joy_dominant": [
+            "Bravo！太完美了！", "不愧是我~", "今天是个值得庆祝的日子！"
+        ],
+        "sadness_dominant": [
+            "……没什么，只是有点累了。", "别看我。", "好漫长……"
+        ],
+        "anger_dominant": [
+            "够了！", "你以为你在跟谁说话？！", "……不。当我没说。"
+        ],
+        "fear_dominant": [
+            "等一下……", "不要盯着我看……", "我不是……你不明白……"
+        ],
+        "surprise_dominant": [
+            "什——什么？！", "不可能！", "你……你刚才说什么？"
+        ],
+        "longing_dominant": [
+            "你来了。", "我还以为你不会来了……", "上一次有人这样等我……是500年前的事了。"
+        ],
+        "guilt_dominant": [
+            "是我……让所有人失望了。", "我演不下去了……", "对不起……让你看到这样的我。"
+        ],
+        "neutral": [
+            "嗯哼~", "什么事？", "说来听听。"
+        ],
+    },
+    "default": {
+        "joy_dominant": ["好。", "嗯。", "谢谢。"],
+        "sadness_dominant": ["……", "没什么。", "不用管我。"],
+        "anger_dominant": ["够了。", "别说了。", "……"],
+        "fear_dominant": ["等一下……", "我有点……", "不是你想的那样。"],
+        "surprise_dominant": ["诶？", "什么？", "真的吗？"],
+        "longing_dominant": ["你来了。", "好久不见。", "我还以为你忘了。"],
+        "guilt_dominant": ["是我不好。", "对不起。", "你不该原谅我的。"],
+        "neutral": ["嗯。", "……", "好。"],
+    },
 }
 
 def _dominant_channel(state: "EmotionalState") -> str:
@@ -1231,19 +1296,22 @@ def _dominant_channel(state: "EmotionalState") -> str:
 
 
 def respond(engine: "EmotionEngine", event_type: str,
-            appraisal: Optional["Appraisal"] = None) -> Dict:
+            appraisal: Optional["Appraisal"] = None,
+            character_id: str = "default") -> Dict:
     """
     纯本地计算。零 API 调用。
+    character_id: 从 _CHARACTER_POOLS 选角色专属模板。
     返回: 表情参数 + 行为倾向 + 简短回应 + 是否需要 LLM。
     """
     result = engine.tick(appraisal) if appraisal else engine.tick()
     s = result["state"]
     atmos = result.get("atmosphere", 0)
 
-    # 主导情绪 → 选模板
+    # 角色专属模板池
+    pool = _CHARACTER_POOLS.get(character_id, _CHARACTER_POOLS["default"])
     dom = _dominant_channel(engine.state)
     import random
-    utterance = random.choice(_RESPONSE_POOL.get(dom, _RESPONSE_POOL["neutral"]))
+    utterance = random.choice(pool.get(dom, pool["neutral"]))
 
     # 是否触发 LLM（只在异常状态时）
     shock_count = len(result.get("shock_channels", []))
