@@ -1168,6 +1168,112 @@ class MemoryStore:
 
 
 # ══════════════════════════════════════════════════════
+# v0.5 本地思维层 — 零 token 回应系统
+# ══════════════════════════════════════════════════════
+# 95% 的日常交互不需要 LLM。情绪状态 + 氛围 + 旧伤疤
+# 已经足够决定角色的反应。只在深度对话时才调用 LLM。
+
+# 行为倾向映射
+def _action_tendency(state: "EmotionalState", atmos: float) -> str:
+    """从情绪状态推导行为倾向——趋近 or 回避 or 防御"""
+    approach = state.joy + state.trust + state.love
+    avoid    = state.fear + state.sadness + state.disgust
+    if atmos > 0.3:
+        avoid *= 1.3  # 紧绷氛围放大回避
+    if approach > avoid * 1.2:
+        return "approach"   # 趋近——想靠近
+    elif avoid > approach * 1.2:
+        return "withdraw"   # 回避——想躲
+    else:
+        return "still"      # 僵住——不确定
+
+# 回应模板池（按主导情绪分组）
+_RESPONSE_POOL = {
+    "joy_dominant": [
+        "……嗯。", "好。", "就这样。"
+    ],
+    "sadness_dominant": [
+        "……", "没什么。", "不用管我。"
+    ],
+    "anger_dominant": [
+        "……够了。", "别说了。", "我不想谈这个。"
+    ],
+    "fear_dominant": [
+        "等一下……", "我有点……", "不是你想的那样……"
+    ],
+    "surprise_dominant": [
+        "诶？", "什么？", "你……认真的？"
+    ],
+    "longing_dominant": [
+        "你来了。", "我还以为你不会过来了。", "……好久不见。"
+    ],
+    "guilt_dominant": [
+        "是我不好。", "对不起……", "你不该原谅我的。"
+    ],
+    "neutral": [
+        "嗯。", "……", "好。"
+    ],
+}
+
+def _dominant_channel(state: "EmotionalState") -> str:
+    """返回当前最突出的情绪通道标签"""
+    candidates = [
+        ("joy_dominant",      state.joy),
+        ("sadness_dominant",  state.sadness),
+        ("anger_dominant",    state.anger),
+        ("fear_dominant",     state.fear),
+        ("surprise_dominant", state.surprise),
+        ("longing_dominant",  state.longing),
+        ("guilt_dominant",    state.guilt),
+    ]
+    best = max(candidates, key=lambda x: x[1])
+    return best[0] if best[1] > 0.3 else "neutral"
+
+
+def respond(engine: "EmotionEngine", event_type: str,
+            appraisal: Optional["Appraisal"] = None) -> Dict:
+    """
+    纯本地计算。零 API 调用。
+    返回: 表情参数 + 行为倾向 + 简短回应 + 是否需要 LLM。
+    """
+    result = engine.tick(appraisal) if appraisal else engine.tick()
+    s = result["state"]
+    atmos = result.get("atmosphere", 0)
+
+    # 主导情绪 → 选模板
+    dom = _dominant_channel(engine.state)
+    import random
+    utterance = random.choice(_RESPONSE_POOL.get(dom, _RESPONSE_POOL["neutral"]))
+
+    # 是否触发 LLM（只在异常状态时）
+    shock_count = len(result.get("shock_channels", []))
+    needs_llm = (engine.state.surprise > 0.8 or shock_count > 4 or
+                 len(result.get("blends", [])) > 2)
+
+    return {
+        # Live2D 参数映射
+        "expression": {
+            "brow_angle":     round(-0.5 + engine.state.joy * 0.8 - engine.state.sadness * 0.6, 3),
+            "mouth_curve":    round(-0.3 + engine.state.joy * 0.7 - engine.state.anger * 0.3, 3),
+            "eye_open":       round(0.8 + engine.state.surprise * 0.4 - engine.state.fear * 0.1, 3),
+            "blush":          round(min(1.0, engine.state.joy * 0.4 + engine.state.guilt * 0.3), 3),
+            "gaze_direction": round(engine.state.longing * 0.5 - engine.state.fear * 0.3, 3),
+            "head_tilt":      round(engine.state.sadness * 0.3 + engine.state.guilt * 0.2, 3),
+        },
+        # 行为
+        "action":          _action_tendency(engine.state, atmos),
+        "atmosphere":      round(atmos, 3),
+        # 简短回应（模板，非 LLM）
+        "utterance":       utterance,
+        # 是否建议调 LLM
+        "needs_llm":       needs_llm,
+        # 底层情绪数据（调试用）
+        "_state":          s,
+        "_dominant":       dom,
+    }
+
+
+# ══════════════════════════════════════════════════════
 # 快速测试
 # ══════════════════════════════════════════════════════
 
