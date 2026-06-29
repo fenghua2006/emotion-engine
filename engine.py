@@ -1280,6 +1280,93 @@ _CHARACTER_POOLS = {
     },
 }
 
+
+# ══════════════════════════════════════════════════════
+# LLM 增强模式 — 可选。引擎已算完情绪，LLM 只负责表达。
+# ══════════════════════════════════════════════════════
+
+def _build_llm_prompt(engine: "EmotionEngine", user_input: str,
+                      character_name: str, character_desc: str,
+                      recent_memories: List["MemoryItem"]) -> str:
+    """构建 LLM prompt——引擎状态已注入，LLM 只做表达。"""
+    s = engine.state
+    scars = engine.scars.all_scars()
+    mem_text = ""
+    if recent_memories:
+        mem_text = "Relevant memories:\n" + "\n".join(
+            f"- {m.content}" for m in recent_memories[:3]
+        )
+
+    return f"""You are {character_name}. {character_desc}
+
+Your current emotional state (pre-computed, do NOT recalculate):
+  joy={s.joy:.2f} sadness={s.sadness:.2f} anger={s.anger:.2f} fear={s.fear:.2f}
+  love={s.love:.2f} trust={s.trust:.2f} guilt={s.guilt:.2f} longing={s.longing:.2f}
+  atmosphere={engine.atmosphere:.2f} (-1=relaxed +1=tense)
+  dominant={_dominant_channel(s)}
+  active_scars={scars if scars else 'none'}
+
+{mem_text}
+
+User said: "{user_input}"
+
+Respond in character. Keep it under 80 words. Match the emotional state above.
+If trust is low, be guarded. If longing is high, show it. If guilt is active, show remorse.
+Do NOT describe emotions — express them through what {character_name} says and does."""
+
+
+def respond_llm(engine: "EmotionEngine", user_input: str,
+                character_id: str = "default",
+                character_name: str = "Character",
+                character_desc: str = "A person with complex emotions.",
+                api_key: Optional[str] = None,
+                base_url: str = "https://api.deepseek.com/v1",
+                model: str = "deepseek-chat") -> Dict:
+    """
+    LLM 增强回应——引擎算情绪，LLM 写表达。
+    如果 API 调用失败 → 自动回退到本地模板。
+    """
+    # 先跑情绪引擎
+    local = respond(engine, user_input, character_id=character_id)
+
+    # 召回相关记忆
+    recent = engine.memory.recall(engine.state, len(local.get("shock_channels", [])))
+
+    # 构建 prompt
+    prompt = _build_llm_prompt(engine, user_input, character_name,
+                               character_desc, recent)
+
+    # 尝试 LLM
+    try:
+        import urllib.request, urllib.error
+        data = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 200,
+            "temperature": 0.7,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key or os.environ.get('DEEPSEEK_API_KEY', '')}"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            llm_text = body["choices"][0]["message"]["content"].strip()
+    except Exception:
+        llm_text = None  # 回退
+
+    local["_llm_used"] = llm_text is not None
+    if llm_text:
+        local["utterance"] = llm_text
+    # 否则保持 local 的模板 utterance
+
+    return local
+
 def _dominant_channel(state: "EmotionalState") -> str:
     """返回当前最突出的情绪通道标签"""
     candidates = [
