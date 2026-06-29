@@ -121,7 +121,11 @@ effective_T½ = T½ / (1 + |value - baseline| / baseline)
 
 ## 角色蒸馏
 
-`characters/kokomi.py` — wiki → OCEAN → baseline → appraisal trigger 映射
+`characters/kokomi.py` — 珊瑚宫心海（高尽责·社交焦虑的军师）
+`characters/columbina.py` — 哥伦比娅（极内向·孤独清冷的月神）
+
+wiki → OCEAN → baseline → appraisal trigger 映射。
+两个角色在同一引擎上跑出完全不同的曲线——验证了引擎的区分度。
 
 ## 论文基础
 
