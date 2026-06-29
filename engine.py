@@ -1342,7 +1342,7 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
         data = json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 150,
+            "max_tokens": 80,
             "temperature": 0.7,
         }).encode("utf-8")
 
