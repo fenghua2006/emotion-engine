@@ -1,20 +1,28 @@
 """
-Emotion Engine v0.2 — 多通道情绪交互引擎（无上限版）
-=====================================================
-基于：
+Emotion Engine v0.3 — 多通道情绪交互引擎（记忆耦合·双时钟）
+===========================================================
+论文验证的设计决策:
   - Jennings (2025): 情绪 = 多个并行匹配流同时激活
-  - Vanderbilt Emotional Blends: 混合情绪中各组分互不消灭
+  - Diamond (2007) / Bowen (2016): Arousal 驱动记忆固化，非 Valence
+  - Nielson (2007): 30分钟记忆固化窗口
+  - Sci Reports (2024): 抑郁现实主义（高 sadness 者回忆更准）
+  - Vanderbilt: 混合情绪中各组分互不消灭
   - Self-Excited Dynamics (2024): 消极情绪留存更久
-  - Sentipolis (CMU, 2025): 情绪-记忆耦合
 
 作者: 枫骅 & SCC
-日期: 2026/06/29
+日期: 2026/06/30
 
-v0.2 核心变更:
-  - 去除硬上限 1.0 → 自然饱和 + 感知边际递减
-  - 弹性衰减: 偏离基线越远回弹越快 (k ∝ distance²)
-  - 冲击感 = e^Δ (指数级对比，不是线性差)
-  - 值域开放: raw > 1.0 被感知压缩 (log₁₀ 映射)
+v0.3 核心变更:
+  - 记忆-情绪耦合: Arousal 驱动存储 + 30min 固化窗口 + 三级记忆
+  - Saga 效应: 长期记忆持续微拉基线（每 24h tick 调用一次）
+  - 双时钟: 在线 tick() + 离线 wake() 各通道独立压缩衰减
+  - 记忆召回: Arousal 标记匹配，非情绪一致性
+  - Novelty gate: 相似事件不重复存储
+
+v0.2:
+  - 去除硬上限 1.0 → tanh 自然饱和 + 感知边际递减
+  - 弹性衰减: 偏离基线越远回弹越快
+  - 冲击感 = e^Δ（指数级对比，不是线性差）
 """
 
 import time
@@ -395,6 +403,7 @@ class EmotionEngine:
     memory:      MemoryStore
     events_today:       int = 0
     positive_events:    int = 0
+    _last_saga:         float = field(default_factory=time.time)
 
     def wake(self) -> Dict:
         """
@@ -513,22 +522,46 @@ class EmotionEngine:
             if shock > threshold:
                 shock_channels.append(ch.value)
 
-        # Step 6: 记忆存储 + 固化
+        # Step 6: 记忆存储 + 固化（带 novelty gate）
         if appraisal is not None:
             arousal  = self.state.surprise + len(shock_channels) * 0.5
-            mem = MemoryItem(
-                content      = f"appraisal: gc={appraisal.goal_conduciveness:.2f} gr={appraisal.goal_relevance:.2f}",
-                timestamp    = now,
-                emotion_snap = self.state.to_dict(),
-                arousal      = arousal,
-                relevance    = appraisal.goal_relevance,
+            # Novelty gate: 30min 内同 arousal ±0.15 且同 relevance ±0.2 → 跳过
+            recent = [m for m in self.memory.short_term
+                      if now - m.timestamp < 30 * 60]
+            is_novel = all(
+                abs(m.arousal - arousal) > 0.15 or
+                abs(m.relevance - appraisal.goal_relevance) > 0.2
+                for m in recent
             )
-            self.memory.store(mem)
+            if is_novel or len(recent) == 0:
+                mem = MemoryItem(
+                    content=f"gc={appraisal.goal_conduciveness:.1f} gr={appraisal.goal_relevance:.1f}",
+                    timestamp=now,
+                    emotion_snap=self.state.to_dict(),
+                    arousal=arousal,
+                    relevance=appraisal.goal_relevance,
+                )
+                self.memory.store(mem)
 
         # 30分钟固化窗口检查
         self.memory.consolidate()
         # 短期记忆清理
         self.memory.decay_short_term()
+
+        # Step 7: Saga 效应（每累计 24h 应用一次长期记忆基线拉力）
+        saga_elapsed = (now - self._last_saga) / 3600.0  # 小时
+        if saga_elapsed > 24 and (self.memory.flash or self.memory.long_term):
+            baseline = self.personality.baseline()
+            pull = self.memory.saga_pull(baseline)
+            for ch_name, offset in pull.items():
+                if abs(offset) > 0.001:
+                    ch_enum = Channel(ch_name)
+                    if ch_enum in FAST_CHANNELS:
+                        current = getattr(self.state, ch_name)
+                        # Saga 拉力轻柔——每次最多移动 0.02
+                        clamped = max(-0.02, min(0.02, offset))
+                        setattr(self.state, ch_name, current + clamped)
+            self._last_saga = now
 
         # 更新计时器
         self.state._last_update = now
@@ -670,13 +703,12 @@ class MemoryStore:
         for _, mem in scored[:limit]:
             mem.access_count += 1
 
-        # 抑郁现实主义：高 sadness 者不偏向负面回忆
-        # 低 sadness 者反而有轻度正向偏差——过滤掉 sadness > 0.5 的记忆
+        # 抑郁现实主义修正：高 sadness 者回忆更准，低 sadness 者有轻度正向偏差。
+        # 不是硬截断——是权重微调（正常人格的悲伤记忆权重 ×0.85，不是砍掉）
         sad = current_state.sadness
-        if sad < 0.3:
-            # 正常人格有轻度正向偏差
-            scored = [(s, m) for s, m in scored
-                      if m.emotion_snap.get("sadness", 0) < 0.6]
+        if sad < 0.25:
+            scored = [(s * (0.85 if m.emotion_snap.get("sadness", 0) > 0.5 else 1.0), m)
+                      for s, m in scored]
 
         return [m for _, m in scored[:limit]]
 
