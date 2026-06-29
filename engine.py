@@ -125,15 +125,22 @@ HALF_LIFE: Dict[Channel, float] = {
     Channel.TRUST:    None,   # 慢通道——不自动衰减
 }
 
-# 每通道最大冲击权重（δ 的感受放大系数）
+# 冲击阈值: 当 shock = e^(Δ×2)-1 超过此值 → 触发 shock 标记
+# 不同通道有不同的"冲击感知阈值"：
+#   joy: 0.3     喜悦容易感受但冲击不大（正面情绪缓冲强）
+#   sadness: 0.5 悲伤门槛高但一旦触发就是深刻的
+#   anger: 0.4   中等阈值
+#   fear: 0.5    高门槛——恐惧冲击是严重事件
+#   disgust: 0.3 厌恶敏感但消退快
+#   surprise: 0.6 最高门槛——惊讶本身就是冲击本质
+# 慢通道 (love/trust) 无冲击——渐进累积
 SHOCK_WEIGHT: Dict[Channel, float] = {
     Channel.JOY:       0.3,
-    Channel.SADNESS:   0.5,   # 悲伤的冲击感最强
+    Channel.SADNESS:   0.5,
     Channel.ANGER:     0.4,
     Channel.FEAR:      0.5,
     Channel.DISGUST:   0.3,
-    Channel.SURPRISE:  0.6,   # 惊讶本身就是冲击
-    # 慢通道没有冲击感——是渐进累积的
+    Channel.SURPRISE:  0.6,
 }
 
 
@@ -215,16 +222,16 @@ def apply_interactions(state: EmotionalState) -> List[str]:
 
         if effect == "amplify_joy":
             amp = vb * strength
-            state.joy = state.joy + amp * tanh_saturate(state.joy)
+            state.joy = state.joy + amp * saturate(state.joy)
         elif effect == "amplify_anger":
             amp = vb * strength
-            state.anger = state.anger + amp * tanh_saturate(state.anger)
+            state.anger = state.anger + amp * saturate(state.anger)
         elif effect == "amplify_fear":
             amp = vb * strength
-            state.fear = state.fear + amp * tanh_saturate(state.fear)
+            state.fear = state.fear + amp * saturate(state.fear)
         elif effect == "amplify_trust":
             amp = strength
-            state.trust = state.trust + amp * tanh_saturate(state.trust)
+            state.trust = state.trust + amp * saturate(state.trust)
         elif effect.startswith("suppress"):
             target = effect.split("_")[1]
             current = getattr(state, target)
@@ -235,9 +242,10 @@ def apply_interactions(state: EmotionalState) -> List[str]:
     return blends
 
 
-def tanh_saturate(x: float, asymptote: float = 3.0) -> float:
-    """自然饱和因子: 值越高，增量越被压缩。
-    1 - x/asymptote 的平滑版——值在 0.5 时几乎不压，>2.0 时显著压。
+def saturate(x: float, asymptote: float = 3.0) -> float:
+    """自然饱和因子: 1 - x/asymptote。
+    值越高增量越小。x=0→1.0, x=1.5→0.5, x=3.0→0。
+    不是 tanh——是线性压缩，算起来轻。
     """
     return max(0.0, 1.0 - x / asymptote)
 
@@ -252,7 +260,7 @@ def grow_slow_channels(state: EmotionalState, events_today: int,
     for ch in SLOW_CHANNELS:
         current = getattr(state, ch.value)
         # 自然饱和（值越高长得越慢）
-        sat = tanh_saturate(current, asymptote=2.0)
+        sat = saturate(current, asymptote=2.0)
         growth = elapsed_hours * 0.0005 * sat
         pos_growth = positive_count * 0.02 * sat
         setattr(state, ch.value, current + growth + pos_growth)
@@ -273,9 +281,11 @@ def damage_trust(state: EmotionalState, betrayal_severity: float):
 def gate_appraisal(raw_activation: Dict[Channel, float],
                    trust: float, love: float) -> Dict[Channel, float]:
     """trust/love 在认知评估阶段压低负面/抬高正面。"""
-    fear_gate   = max(0.02, 1.0 - trust * 0.9)   # trust=0.8 → fear 打 2 折
-    anger_gate  = max(0.05, 1.0 - trust * 0.7)   # trust=0.8 → anger 打 4.4 折
-    joy_boost   = 1.0 + love * 0.5               # love=0.6 → joy 加成 30%
+    fear_gate    = max(0.02, 1.0 - trust * 0.9)       # trust=0.8 → fear 打 2 折
+    anger_gate   = max(0.05, 1.0 - trust * 0.7)       # trust=0.8 → anger 打 4.4 折
+    sadness_gate = max(0.05, 1.0 - love * 0.6)        # love=0.6 → sadness 打 6.4 折
+    disgust_gate = max(0.05, 1.0 - trust * 0.8)       # trust=0.8 → disgust 打 3.6 折
+    joy_boost    = 1.0 + love * 0.5                   # love=0.6 → joy 加成 30%
 
     gated = {}
     for ch, val in raw_activation.items():
@@ -283,10 +293,14 @@ def gate_appraisal(raw_activation: Dict[Channel, float],
             gated[ch] = val * fear_gate
         elif ch == Channel.ANGER:
             gated[ch] = val * anger_gate
+        elif ch == Channel.SADNESS:
+            gated[ch] = val * sadness_gate
+        elif ch == Channel.DISGUST:
+            gated[ch] = val * disgust_gate
         elif ch == Channel.JOY:
             gated[ch] = val * joy_boost
         else:
-            gated[ch] = val  # 原始通过
+            gated[ch] = val
     return gated
 
 
@@ -370,6 +384,13 @@ class EmotionEngine:
         elapsed_minutes = (now - self.state._last_update) / 60.0
         elapsed_hours   = elapsed_minutes / 60.0
 
+        # NaN/Inf 防护——极端值后重设
+        for ch in Channel:
+            val = getattr(self.state, ch.value)
+            if math.isnan(val) or math.isinf(val):
+                bl = self.personality.baseline()
+                setattr(self.state, ch.value, bl[ch])
+
         # Step 0: 保存上一帧快照（对比度用）
         self.state.snapshot_previous()
 
@@ -400,7 +421,7 @@ class EmotionEngine:
                 if ch in gated and gated[ch] > 0.01:
                     current = getattr(self.state, ch.value)
                     # 自然饱和：值越高增量越小（无硬上限）
-                    saturation = tanh_saturate(current)
+                    saturation = saturate(current)
                     new_val = current + gated[ch] * saturation
                     setattr(self.state, ch.value, new_val)
 
