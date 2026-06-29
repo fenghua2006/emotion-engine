@@ -27,6 +27,9 @@ v0.2:
 
 import time
 import math
+import json
+import sqlite3
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
@@ -643,7 +646,8 @@ class EmotionEngine:
         if appraisal is not None:
             arousal  = self.state.surprise + len(shock_channels) * 0.5
             # Novelty gate: 30min 内同 arousal ±0.15 且同 relevance ±0.2 → 跳过
-            recent = [m for m in self.memory.short_term
+            recent = self.memory.recent_items(now, 30) if hasattr(self.memory, 'recent_items') else \
+                     [m for m in getattr(self.memory, 'short_term', [])
                       if now - m.timestamp < 30 * 60]
             is_novel = all(
                 abs(m.arousal - arousal) > 0.15 or
@@ -781,6 +785,213 @@ class SensitizationStore:
         """返回所有旧伤疤及其敏感化程度。"""
         return {tag: p.threshold_shift for tag, p in self.patterns.items()
                 if p.threshold_shift > 0.01}
+
+
+# ══════════════════════════════════════════════════════
+# v0.5 SQLite 持久化
+# ══════════════════════════════════════════════════════
+
+DB_PATH = "emotion.db"
+
+
+def _get_db(path: str = DB_PATH) -> sqlite3.Connection:
+    db = sqlite3.connect(path)
+    db.execute("PRAGMA journal_mode=WAL")     # 并发安全
+    db.execute("PRAGMA synchronous=NORMAL")    # 性能
+    return db
+
+
+def init_db(path: str = DB_PATH):
+    """初始化数据库——建表。首次调用或 DB 不存在时调用。"""
+    db = _get_db(path)
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            tier TEXT NOT NULL DEFAULT 'short_term',
+            arousal REAL NOT NULL DEFAULT 0,
+            relevance REAL NOT NULL DEFAULT 0,
+            emotion_snap TEXT NOT NULL DEFAULT '{}',
+            timestamp REAL NOT NULL,
+            access_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
+        CREATE INDEX IF NOT EXISTS idx_memories_arousal ON memories(arousal);
+        CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp);
+
+        CREATE TABLE IF NOT EXISTS snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            state_json TEXT NOT NULL,
+            atmosphere REAL NOT NULL DEFAULT 0,
+            saved_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS scars (
+            tag TEXT PRIMARY KEY,
+            trigger_count INTEGER NOT NULL DEFAULT 0,
+            threshold_shift REAL NOT NULL DEFAULT 0,
+            positive_counter INTEGER NOT NULL DEFAULT 0,
+            last_triggered REAL NOT NULL DEFAULT 0
+        );
+    """)
+    db.commit()
+    return db
+
+
+def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH):
+    """保存完整引擎状态——断线恢复用。"""
+    db = _get_db(path)
+    state_json = json.dumps(engine.state.to_dict())
+    db.execute(
+        "INSERT INTO snapshots (state_json, atmosphere, saved_at) VALUES (?,?,?)",
+        (state_json, engine.atmosphere, time.time()))
+    # 同时保存 scars
+    for tag, p in engine.scars.patterns.items():
+        db.execute(
+            "INSERT OR REPLACE INTO scars VALUES (?,?,?,?,?)",
+            (tag, p.trigger_count, p.threshold_shift, p.positive_counter, p.last_triggered))
+    db.commit()
+
+
+def load_snapshot(engine: "EmotionEngine", path: str = DB_PATH) -> bool:
+    """从上次快照恢复。返回 True 如果成功。"""
+    if not os.path.exists(path):
+        return False
+    db = _get_db(path)
+    row = db.execute(
+        "SELECT state_json, atmosphere FROM snapshots ORDER BY saved_at DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return False
+    data = json.loads(row[0])
+    for ch in Channel:
+        if ch.value in data:
+            setattr(engine.state, ch.value, data[ch.value])
+    engine.atmosphere = row[1]
+    # 恢复 scars
+    for row_s in db.execute("SELECT * FROM scars"):
+        tag, cnt, shift, pos, last = row_s
+        p = SensitizationPattern(tag=tag, trigger_count=cnt,
+                                  threshold_shift=shift, positive_counter=pos,
+                                  last_triggered=last)
+        engine.scars.patterns[tag] = p
+    return True
+
+
+# ══════════════════════════════════════════════════════
+# SQLite 版 MemoryStore（替换内存版，可选）
+# ══════════════════════════════════════════════════════
+
+class MemoryStoreDB:
+    """与 MemoryStore 相同接口，底层用 SQLite。"""
+
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self.db = _get_db(db_path)
+        self._pending: List[Tuple[float, "MemoryItem"]] = []
+
+    def store(self, item: "MemoryItem"):
+        self.db.execute(
+            "INSERT INTO memories (content,tier,arousal,relevance,emotion_snap,timestamp) "
+            "VALUES (?,?,?,?,?,?)",
+            (item.content, item.tier, item.arousal, item.relevance,
+             json.dumps(item.emotion_snap), item.timestamp))
+        self.db.commit()
+        self._pending.append((item.timestamp, item))
+
+    def consolidate(self, now: Optional[float] = None):
+        if now is None:
+            now = time.time()
+        window = 30 * 60
+        survived = []
+        for stored_at, item in self._pending:
+            if now - stored_at < window:
+                survived.append((stored_at, item))
+                continue
+            score = item.arousal * 0.5 + item.relevance * 0.3 + item.arousal * item.relevance * 0.2
+            tier = "flash" if score > 0.6 else ("long_term" if score > 0.3 else "short_term")
+            self.db.execute("UPDATE memories SET tier=? WHERE id=?",
+                            (tier, getattr(item, '_db_id', None)))
+            self.db.commit()
+        self._pending = survived
+
+    def decay_short_term(self):
+        cutoff = time.time() - 7 * 86400
+        self.db.execute("DELETE FROM memories WHERE tier='short_term' AND timestamp < ?", (cutoff,))
+        self.db.commit()
+
+    def recall(self, current_state: "EmotionalState", shock_count: int,
+               limit: int = 5) -> List["MemoryItem"]:
+        current_arousal = current_state.surprise + shock_count * 0.5
+        rows = self.db.execute(
+            "SELECT * FROM memories ORDER BY "
+            "CASE tier WHEN 'flash' THEN 3 WHEN 'long_term' THEN 2 ELSE 1 END DESC, "
+            "timestamp DESC LIMIT 200"
+        ).fetchall()
+
+        scored = []
+        for r in rows:
+            _, content, tier, arousal, relevance, snap_json, ts, ac = r
+            age_days = (time.time() - ts) / 86400.0
+            arousal_match = 1.0 - min(1.0, abs(current_arousal - arousal) / 2.0)
+            tier_weight = {"flash": 1.0, "long_term": 0.6, "short_term": 0.3}.get(tier, 0.3)
+            score = arousal_match * 0.5 + tier_weight * 0.3 + (0.9 ** age_days) * 0.2
+            scored.append((score, r))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        sad = current_state.sadness
+        if sad < 0.25:
+            scored = [(s, r) for s, r in scored
+                      if json.loads(r[5]).get("sadness", 0) < 0.6 or s > 1.0]
+
+        result = []
+        for _, r in scored[:limit]:
+            _, content, tier, arousal, relevance, snap_json, ts, ac = r
+            mem = MemoryItem(content=content, timestamp=ts,
+                             emotion_snap=json.loads(snap_json),
+                             arousal=arousal, relevance=relevance, tier=tier,
+                             access_count=ac)
+            self.db.execute("UPDATE memories SET access_count=? WHERE id=?",
+                            (ac + 1, r[0]))
+            result.append(mem)
+        self.db.commit()
+        return result
+
+    def saga_pull(self, baseline: Dict[Channel, float]) -> Dict[str, float]:
+        pull = {ch.value: 0.0 for ch in Channel}
+        total_weight = 0.0
+        rows = self.db.execute(
+            "SELECT emotion_snap, timestamp FROM memories WHERE tier IN ('flash','long_term')"
+        ).fetchall()
+        for snap_json, ts in rows:
+            snap = json.loads(snap_json)
+            age = (time.time() - ts) / 86400.0
+            weight = 1.0 * (0.977 ** age)
+            total_weight += weight
+            for ch_name, val in snap.items():
+                if ch_name in pull:
+                    baseline_val = baseline.get(Channel(ch_name), 0.0)
+                    pull[ch_name] += (val - baseline_val) * weight
+        if total_weight > 0:
+            for ch in pull:
+                pull[ch] /= total_weight
+        return pull
+
+    def recent_items(self, now: float, minutes: float = 30) -> List["MemoryItem"]:
+        cutoff = now - minutes * 60
+        rows = self.db.execute(
+            "SELECT * FROM memories WHERE timestamp > ?", (cutoff,)
+        ).fetchall()
+        return [MemoryItem(content=r[1], timestamp=r[6],
+                           emotion_snap=json.loads(r[5]),
+                           arousal=r[3], relevance=r[4]) for r in rows]
+
+    def stats(self) -> Dict:
+        flash = self.db.execute("SELECT COUNT(*) FROM memories WHERE tier='flash'").fetchone()[0]
+        lt = self.db.execute("SELECT COUNT(*) FROM memories WHERE tier='long_term'").fetchone()[0]
+        st = self.db.execute("SELECT COUNT(*) FROM memories WHERE tier='short_term'").fetchone()[0]
+        return {"flash_count": flash, "long_term_count": lt,
+                "short_term_count": st, "pending_count": len(self._pending)}
 
 
 # ══════════════════════════════════════════════════════
@@ -964,7 +1175,10 @@ if __name__ == "__main__":
     for ch, val in bl.items():
         setattr(state, ch.value, val)
 
-    engine = EmotionEngine(state=state, personality=pers, memory=MemoryStore(), scars=SensitizationStore())
+    db = init_db("test_emotion.db")
+    engine = EmotionEngine(state=state, personality=pers,
+                           memory=MemoryStoreDB("test_emotion.db"),
+                           scars=SensitizationStore())
 
     print("=== 初始状态 ===")
     for k, v in state.to_dict().items():
@@ -1013,3 +1227,23 @@ if __name__ == "__main__":
             print("  怕失去: 爱在恐惧的底色上")
     print(f"  guilt 已激活: {result['state'].get('guilt', 0):.3f}")
     print(f"  trust-love 耦合: trust={result['state']['trust']:.3f} love={result['state']['love']:.3f}")
+
+    # v0.5: 持久化测试
+    print("\n=== v0.5: SQLite save/load ===")
+    save_snapshot(engine, "test_emotion.db")
+    print(f"  Saved snapshot. trust={engine.state.trust:.3f} guilt={engine.state.guilt:.3f}")
+
+    # 模拟"关掉引擎再打开"
+    engine2 = EmotionEngine(state=EmotionalState(),
+                            personality=pers,
+                            memory=MemoryStoreDB("test_emotion.db"),
+                            scars=SensitizationStore())
+    if load_snapshot(engine2, "test_emotion.db"):
+        print(f"  Restored! trust={engine2.state.trust:.3f} guilt={engine2.state.guilt:.3f}")
+        print(f"  State preserved across restart: OK")
+    else:
+        print("  Restore failed")
+
+    # 清理
+    engine2.memory.db.close()
+    os.remove("test_emotion.db")
