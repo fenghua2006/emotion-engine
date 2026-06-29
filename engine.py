@@ -282,16 +282,41 @@ def saturate(x: float, asymptote: float = 3.0) -> float:
 # 慢通道累积 & 破坏
 # ══════════════════════════════════════════════════════
 
+def trust_target(love: float) -> float:
+    """trust 的引力线：随 love 上升。不是固定基线，是曲线。
+    love=0.1 → trust_target=0.10
+    love=0.3 → trust_target=0.22
+    love=0.6 → trust_target=0.50
+    love=0.9 → trust_target=0.78
+    斜率递减——爱越高，每单位爱换来的信任增益越小。
+    """
+    return 1.0 - 1.0 / (1.0 + love * 3.5)
+
+
 def grow_slow_channels(state: EmotionalState, events_today: int,
                        positive_count: int, elapsed_hours: float):
-    """慢通道随时间 + 正面交互缓慢增长。无硬上限。"""
-    for ch in SLOW_CHANNELS:
-        current = getattr(state, ch.value)
-        # 自然饱和（值越高长得越慢）
-        sat = saturate(current, asymptote=2.0)
-        growth = elapsed_hours * 0.0005 * sat
-        pos_growth = positive_count * 0.02 * sat
-        setattr(state, ch.value, current + growth + pos_growth)
+    """慢通道互相照应——love 和 trust 是耦合对，不是单向依赖。
+    trust 向 trust_target(love) 引力线靠近。
+    love 受 trust 影响：trust 长期低于目标时 love 缓慢侵蚀。
+    """
+    # trust 向 trust_target(love) 靠近
+    target = trust_target(state.love)
+    gap = target - state.trust
+    if gap > 0:
+        state.trust += gap * 0.02 + elapsed_hours * 0.0003
+    else:
+        state.trust += gap * 0.005  # 溢出时慢慢降回
+
+    # love 也感受 trust——trust 长期低于 target 时 love 被侵蚀
+    trust_deficit = max(0.0, target - state.trust)
+    if trust_deficit > 0.15:
+        # 信任缺口大 → 爱被慢慢磨掉
+        state.love -= trust_deficit * 0.005 * elapsed_hours
+    else:
+        # 信任健康 → 爱自然生长
+        sat_love = saturate(state.love, asymptote=2.0)
+        love_growth = elapsed_hours * 0.0005 * sat_love + positive_count * 0.02 * sat_love
+        state.love += love_growth
 
 
 def damage_trust(state: EmotionalState, betrayal_severity: float):
