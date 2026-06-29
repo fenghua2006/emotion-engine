@@ -360,8 +360,8 @@ def gate_appraisal(raw_activation: Dict[Channel, float],
         elif ch == Channel.DISGUST:
             gated[ch] = val * disgust_gate
             # 低信任+高正面评价 → 厌恶（"你喜欢的是我的面具"）
-            if trust < 0.3 and raw_activation.get(Channel.JOY, 0) > 0.3:
-                gated[ch] += (0.3 - trust) * 0.6
+            if trust < 0.35 and raw_activation.get(Channel.JOY, 0) > 0.2:
+                gated[ch] += (0.35 - trust) * 0.8
         elif ch == Channel.JOY:
             gated[ch] = val * joy_boost * joy_trust_gate  # trust 打折正面
         else:
