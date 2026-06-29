@@ -431,6 +431,8 @@ class EmotionEngine:
     events_today:       int = 0
     positive_events:    int = 0
     _last_saga:         float = field(default_factory=time.time)
+    atmosphere:         float = -0.3  # -1 放松 ~ +1 紧绷。初始偏轻松。
+    _recent_shocks:     List[float] = field(default_factory=list)  # 最近 N 个事件的 shock 强度
 
     def wake(self) -> Dict:
         """
@@ -552,7 +554,40 @@ class EmotionEngine:
             if appraisal.goal_conduciveness > 0 and appraisal.other_agency > 0:
                 self.positive_events += 1
 
-        # Step 4: 交互矩阵
+        # Step 4: 氛围更新 + 调制
+        # 氛围基于最近 shock 密度和当前 arousal 漂移
+        recent_shock_intensity = len(shock_channels) / max(1, len(FAST_CHANNELS))
+        self._recent_shocks.append(recent_shock_intensity)
+        if len(self._recent_shocks) > 5:
+            self._recent_shocks.pop(0)
+
+        # shock 密度高 + 当前 fear/sadness 高 → 变紧绷
+        shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
+        arousal_trend = (self.state.fear + self.state.sadness) / 2
+        # 向目标漂移，一次最多移 0.1
+        target = -0.6 + shock_density * 1.2 + arousal_trend * 0.4
+        self.atmosphere += max(-0.1, min(0.1, target - self.atmosphere))
+
+        # 氛围调制 gate：紧绷放大负面，轻松缓冲负面
+        # atmosphere > 0: 负面放大, 正面削弱；< 0: 反之
+        if self.atmosphere > 0 and appraisal is not None:
+            for ch in FAST_CHANNELS:
+                if ch in gated and gated[ch] > 0.01:
+                    ch_name = ch.value
+                    if ch_name in ("joy",):
+                        gated[ch] *= (1.0 - self.atmosphere * 0.3)  # 紧绷时喜悦打折
+                    elif ch_name in ("sadness", "fear", "anger"):
+                        gated[ch] *= (1.0 + self.atmosphere * 0.4)  # 紧绷时负面放大
+        elif self.atmosphere < 0 and appraisal is not None:
+            for ch in FAST_CHANNELS:
+                if ch in gated and gated[ch] > 0.01:
+                    ch_name = ch.value
+                    if ch_name in ("sadness", "fear", "anger"):
+                        gated[ch] *= (1.0 + self.atmosphere * 0.3)  # 轻松时负面缓冲
+                    elif ch_name in ("joy",):
+                        gated[ch] *= (1.0 - self.atmosphere * 0.2)  # 轻松时喜悦放大
+
+        # Step 5: 交互矩阵
         blends = apply_interactions(self.state)
 
         # Step 5: 对比度冲击感（指数级 Δ 感知，带安全截断）
@@ -622,6 +657,7 @@ class EmotionEngine:
             "trust":          round(self.state.trust, 3),
             "love":           round(self.state.love, 3),
             "memory":         mem_stats,
+            "atmosphere":     round(self.atmosphere, 3),
         }
 
 
