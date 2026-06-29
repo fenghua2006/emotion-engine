@@ -47,10 +47,12 @@ class Channel(Enum):
     SURPRISE = "surprise"  # 惊讶
     TRUST    = "trust"     # 信任          ← 慢通道
     LONGING  = "longing"   # 思念          ← 缺失驱动通道
+    GUILT    = "guilt"     # 愧疚          ← 自责驱动通道
 
 
 FAST_CHANNELS = [Channel.JOY, Channel.SADNESS, Channel.ANGER,
-                 Channel.FEAR, Channel.DISGUST, Channel.SURPRISE]
+                 Channel.FEAR, Channel.DISGUST, Channel.SURPRISE,
+                 Channel.GUILT]
 SLOW_CHANNELS = [Channel.LOVE, Channel.TRUST]
 ABSENCE_CHANNELS = [Channel.LONGING]  # 思念：离线时上升，在线时消退
 
@@ -72,6 +74,7 @@ class EmotionalState:
     surprise:  float = 0.0
     trust:     float = 0.25
     longing:   float = 0.0    # 思念——从零开始。不见才生。
+    guilt:     float = 0.0    # 愧疚——从零开始。不做错事就没有。
 
     # 对比度用的上一个快照
     _previous: Optional[Dict[str, float]] = None
@@ -85,6 +88,7 @@ class EmotionalState:
             "love": self.love, "disgust": self.disgust,
             "surprise": self.surprise, "trust": self.trust,
             "longing": self.longing,
+            "guilt": self.guilt,
         }
 
     def clone(self) -> "EmotionalState":
@@ -134,6 +138,7 @@ HALF_LIFE: Dict[Channel, float] = {
     Channel.LOVE:     None,   # 慢通道——不自动衰减
     Channel.DISGUST:   90,
     Channel.SURPRISE:  30,    # 消散最快
+    Channel.GUILT:   180,     # 愧疚留存很久——和悲伤同级
     Channel.TRUST:    None,   # 慢通道——不自动衰减
 }
 
@@ -153,6 +158,7 @@ SHOCK_WEIGHT: Dict[Channel, float] = {
     Channel.FEAR:      0.5,
     Channel.DISGUST:   0.3,
     Channel.SURPRISE:  0.6,
+    Channel.GUILT:    0.4,
 }
 
 
@@ -218,6 +224,10 @@ INTERACTION_RULES: Dict[Tuple[Channel, Channel], Tuple[str, float]] = {
     (Channel.SURPRISE, Channel.JOY):       ("amplify_joy",     0.25),
     (Channel.DISGUST, Channel.ANGER):      ("amplify_anger",   0.35),  # 道德愤怒
     (Channel.LOVE,    Channel.TRUST):      ("amplify_trust",   0.02),  # 慢调制——非常微弱
+    (Channel.GUILT,   Channel.TRUST):      ("amplify_trust",   0.1),   # 愧疚→包容信任（需要被原谅）
+    (Channel.GUILT,   Channel.ANGER):      ("suppress_anger",  0.3),   # 愧疚压制愤怒（是我的错不是你）
+    (Channel.GUILT,   Channel.SADNESS):    ("amplify_sadness",  0.2),  # 愧疚加深悲伤（后悔）
+    (Channel.GUILT,   Channel.LOVE):       ("amplify_love",    0.05),  # 愧疚→更用力去爱（弥补）
 }
 
 
@@ -241,6 +251,12 @@ def apply_interactions(state: EmotionalState) -> List[str]:
         elif effect == "amplify_fear":
             amp = vb * strength
             state.fear = state.fear + amp * saturate(state.fear)
+        elif effect == "amplify_sadness":
+            amp = vb * strength
+            state.sadness = state.sadness + amp * saturate(state.sadness)
+        elif effect == "amplify_love":
+            amp = strength
+            state.love = state.love + amp * saturate(state.love, asymptote=2.0)
         elif effect == "amplify_trust":
             amp = strength
             state.trust = state.trust + amp * saturate(state.trust)
@@ -338,6 +354,8 @@ def appraise(app: Appraisal) -> Dict[Channel, float]:
     cp = app.coping_potential
     ue = 1.0 - app.expectedness  # 意外程度
 
+    self_agency = 1.0 - app.other_agency  # 我的责任 = 不是别人的
+
     return {
         Channel.JOY:      gc * gr if gc > 0 else 0.0,
         Channel.SADNESS:  -gc * gr * (1.0 - cp) if gc < 0 else 0.0,
@@ -345,6 +363,8 @@ def appraise(app: Appraisal) -> Dict[Channel, float]:
         Channel.FEAR:     -gc * gr * (1.0 - cp) * ue if gc < 0 else 0.0,
         Channel.DISGUST:  -app.social_evaluation * app.other_agency if app.social_evaluation < 0 else 0.0,
         Channel.SURPRISE: ue * gr,
+        Channel.GUILT:    -gc * gr * self_agency if gc < 0 and self_agency > 0.3 else 0.0,
+        # 愧疚 = 坏事发生了 + 是我的责任（自己造成的）
     }
 
 
@@ -373,6 +393,7 @@ class Personality:
             Channel.SURPRISE: 0.05 + self.openness * 0.1,
             Channel.TRUST:    0.15 + self.agreeableness * 0.2 - self.neuroticism * 0.1,
             Channel.LONGING: 0.0,  # 思念基线为零——不见才生
+            Channel.GUILT:   0.0,  # 愧疚基线为零——不做错就没有
         }
 
 
@@ -391,6 +412,7 @@ OFFLINE_COMPRESSION: Dict[Channel, float] = {
     Channel.JOY:      0.20,   # 好事回味还在，但不如当时浓
     Channel.FEAR:     0.25,   # 焦虑能穿透睡眠——醒来还怕
     Channel.SADNESS:  0.30,   # 悲伤穿透力最强——醒来还在被子里
+    Channel.GUILT:    0.25,   # 愧疚也穿透睡眠——但没悲伤那么深
     # 慢通道：离线影响极小
     Channel.TRUST:    0.95,   # 信任不因睡觉消失
     Channel.LOVE:     0.98,   # 几乎不打折
