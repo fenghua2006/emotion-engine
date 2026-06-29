@@ -46,11 +46,13 @@ class Channel(Enum):
     DISGUST  = "disgust"   # 厌恶
     SURPRISE = "surprise"  # 惊讶
     TRUST    = "trust"     # 信任          ← 慢通道
+    LONGING  = "longing"   # 思念          ← 缺失驱动通道
 
 
 FAST_CHANNELS = [Channel.JOY, Channel.SADNESS, Channel.ANGER,
                  Channel.FEAR, Channel.DISGUST, Channel.SURPRISE]
 SLOW_CHANNELS = [Channel.LOVE, Channel.TRUST]
+ABSENCE_CHANNELS = [Channel.LONGING]  # 思念：离线时上升，在线时消退
 
 
 # ══════════════════════════════════════════════════════
@@ -69,6 +71,7 @@ class EmotionalState:
     disgust:   float = 0.0
     surprise:  float = 0.0
     trust:     float = 0.25
+    longing:   float = 0.0    # 思念——从零开始。不见才生。
 
     # 对比度用的上一个快照
     _previous: Optional[Dict[str, float]] = None
@@ -81,6 +84,7 @@ class EmotionalState:
             "anger": self.anger, "fear": self.fear,
             "love": self.love, "disgust": self.disgust,
             "surprise": self.surprise, "trust": self.trust,
+            "longing": self.longing,
         }
 
     def clone(self) -> "EmotionalState":
@@ -368,6 +372,7 @@ class Personality:
             Channel.DISGUST:  0.02 + (1 - self.openness) * 0.08,
             Channel.SURPRISE: 0.05 + self.openness * 0.1,
             Channel.TRUST:    0.15 + self.agreeableness * 0.2 - self.neuroticism * 0.1,
+            Channel.LONGING: 0.0,  # 思念基线为零——不见才生
         }
 
 
@@ -430,6 +435,14 @@ class EmotionEngine:
         offline_hours = offline_minutes / 60.0
         grow_slow_channels(self.state, 0, 0, offline_hours)
 
+        # 思念：离线期间生长。love 越深 + 离线越久 → 思念越重
+        # 公式: longing += love × log₁₀(1 + offline_hours) × 0.1
+        #       有爱才有思念。不爱的人不在就不在。
+        offline_hours = offline_minutes / 60.0
+        if offline_hours > 1 and self.state.love > 0.05:
+            longing_growth = self.state.love * math.log10(1 + offline_hours) * 0.12
+            self.state.longing = min(self.state.longing + longing_growth, self.state.love * 2)
+
         # trust 长时间不联系微降
         offline_days = offline_minutes / 1440.0
         if offline_days > OFFLINE_TRUST_DECAY_DAYS:
@@ -471,6 +484,14 @@ class EmotionEngine:
 
         # Step 1: 弹性衰减（偏离基线越远衰减越快）
         baseline = self.personality.baseline()
+
+        # 思念在线时消退——人在身边，思有所归
+        # 但有 love 时不会归零——爱着的人即使见面也隐约知道会再分开
+        if self.state.longing > 0:
+            longing_decay = 0.3 * elapsed_hours if elapsed_hours > 0 else 0.05
+            floor = self.state.love * 0.05  # 残留底——爱还在
+            self.state.longing = max(floor, self.state.longing - longing_decay)
+
         for ch in FAST_CHANNELS:
             val = getattr(self.state, ch.value)
             hl  = HALF_LIFE[ch]
