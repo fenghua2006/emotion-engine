@@ -336,17 +336,23 @@ def damage_trust(state: EmotionalState, betrayal_severity: float):
 
 def gate_appraisal(raw_activation: Dict[Channel, float],
                    trust: float, love: float) -> Dict[Channel, float]:
-    """trust/love 在认知评估阶段压低负面/抬高正面。"""
+    """trust/love 在认知评估阶段压低负面/抬高正面。
+    v0.5: 低信任时正面事件也被打折——"我爱你"从陌生人嘴里说出来不是喜悦是警惕。
+    """
     fear_gate    = max(0.02, 1.0 - trust * 0.9)       # trust=0.8 → fear 打 2 折
     anger_gate   = max(0.05, 1.0 - trust * 0.7)       # trust=0.8 → anger 打 4.4 折
     sadness_gate = max(0.05, 1.0 - love * 0.6)        # love=0.6 → sadness 打 6.4 折
     disgust_gate = max(0.05, 1.0 - trust * 0.8)       # trust=0.8 → disgust 打 3.6 折
     joy_boost    = 1.0 + love * 0.5                   # love=0.6 → joy 加成 30%
+    joy_trust_gate = min(1.0, trust * 1.5)            # trust=0.2 → joy 打 3 折。"我爱你"不可信
 
     gated = {}
     for ch, val in raw_activation.items():
         if ch == Channel.FEAR:
             gated[ch] = val * fear_gate
+            # 低信任+正面事件 → fear 上升（不对劲）
+            if trust < 0.3 and raw_activation.get(Channel.JOY, 0) > 0.3:
+                gated[ch] += (0.3 - trust) * 0.5
         elif ch == Channel.ANGER:
             gated[ch] = val * anger_gate
         elif ch == Channel.SADNESS:
@@ -354,7 +360,7 @@ def gate_appraisal(raw_activation: Dict[Channel, float],
         elif ch == Channel.DISGUST:
             gated[ch] = val * disgust_gate
         elif ch == Channel.JOY:
-            gated[ch] = val * joy_boost
+            gated[ch] = val * joy_boost * joy_trust_gate  # trust 打折正面
         else:
             gated[ch] = val
     return gated
