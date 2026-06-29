@@ -486,9 +486,8 @@ class EmotionEngine:
         grow_slow_channels(self.state, 0, 0, offline_hours)
 
         # 思念：离线期间生长。love 越深 + 离线越久 → 思念越重
-        # 公式: longing += love × log₁₀(1 + offline_hours) × 0.1
+        # 公式: longing += love × log₁₀(1 + offline_hours) × 0.12
         #       有爱才有思念。不爱的人不在就不在。
-        offline_hours = offline_minutes / 60.0
         if offline_hours > 1 and self.state.love > 0.05:
             longing_growth = self.state.love * math.log10(1 + offline_hours) * 0.12
             self.state.longing = min(self.state.longing + longing_growth, self.state.love * 2)
@@ -981,8 +980,8 @@ if __name__ == "__main__":
     print(f"  blends: {result['blends']}")
     print(f"  shock: {result['shock_channels']}")
 
-    # 事件2: 坏消息（被伴侣放鸽子）
-    print("\n=== 事件: 被放鸽子 ===")
+    # 事件2: 坏消息（被放鸽子——别人的责任）
+    print("\n=== 事件: 被放鸽子 (other_agency=0.9) ===")
     result = engine.tick(Appraisal(
         goal_relevance=0.8, goal_conduciveness=-0.7,
         expectedness=0.2, other_agency=0.9, coping_potential=0.2))
@@ -990,11 +989,27 @@ if __name__ == "__main__":
         print(f"  {k}: {v:.3f}")
     print(f"  blends: {result['blends']}")
     print(f"  shock: {result['shock_channels']}")
+    print(f"  atmosphere: {result.get('atmosphere', 'N/A')}")
+    print(f"  memory: {result.get('memory', 'N/A')}")
+
+    # 事件3: 我伤害了别人（高 self_agency → guilt 触发）
+    print("\n=== 事件: 我对朋友说了伤人的话 (self_agency=0.7) ===")
+    result = engine.tick(Appraisal(
+        goal_relevance=0.8, goal_conduciveness=-0.6,
+        expectedness=0.3, other_agency=0.3,  # low other → high self
+        coping_potential=0.5, social_evaluation=-0.5))
+    for k, v in result["state"].items():
+        print(f"  {k}: {v:.3f}")
+    print(f"  blends: {result['blends']}")
+    print(f"  shock: {result['shock_channels']}")
+    print(f"  atmosphere: {result.get('atmosphere', 'N/A')}")
 
     # 打印交互说明
-    print("\n=== 交互矩阵触发说明 ===")
+    print("\n=== 交互矩阵 + 新功能验证 ===")
     for b in result['blends']:
         if b == "joy+sadness":
             print("  苦涩的微笑: 喜悦和悲伤同时存在")
         elif b == "love+fear":
             print("  怕失去: 爱在恐惧的底色上")
+    print(f"  guilt 已激活: {result['state'].get('guilt', 0):.3f}")
+    print(f"  trust-love 耦合: trust={result['state']['trust']:.3f} love={result['state']['love']:.3f}")
