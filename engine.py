@@ -461,8 +461,8 @@ class EmotionEngine:
     """一次一个 Agent 的实例。"""
     state:       EmotionalState
     personality: Personality
-    memory:      MemoryStore
-    scars:       SensitizationStore
+    memory:      "MemoryStore"
+    scars:       "SensitizationStore"
     events_today:       int = 0
     positive_events:    int = 0
     _last_saga:         float = field(default_factory=time.time)
