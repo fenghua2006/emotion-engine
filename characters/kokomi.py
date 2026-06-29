@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
     EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    FAST_CHANNELS
+    MemoryStore, FAST_CHANNELS
 )
 
 
@@ -123,7 +123,7 @@ def create_kokomi():
     bl = kokomi_personality.baseline()
     for ch, val in bl.items():
         setattr(state, ch.value, val)
-    return EmotionEngine(state=state, personality=kokomi_personality)
+    return EmotionEngine(state=state, personality=kokomi_personality, memory=MemoryStore())
 
 
 # ═══════════════════════════════════════════════
@@ -155,6 +155,11 @@ if __name__ == "__main__":
                 print(f"  {label}")
         if result["shock_channels"]:
             print(f"  !! shock: {result['shock_channels']}")
+        if "memory" in result:
+            print(f"  mem: flash={result['memory']['flash_count']} "
+                  f"long={result['memory']['long_term_count']} "
+                  f"short={result['memory']['short_term_count']} "
+                  f"pending={result['memory']['pending_count']}")
 
     def wait(minutes):
         """模拟时间推移"""
