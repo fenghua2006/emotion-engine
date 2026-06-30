@@ -24,15 +24,17 @@
 ## v0.5 ✅ — 持久化 + 本地思维
 - SQLite 持久化（记忆/状态/伤疤断线不丢）
 - 本地 respond() —— 零 token 回应系统
-- LLM 双模式（本地模板 / DeepSeek API 自由切换）
-- 角色专属语音包（每人独立模板池）
+- LLM 双模式（本地模板 / DeepSeek + Kimi 保底）
+- 角色专属模板池（每人独立 _CHARACTER_POOLS）
 - Live2D 桥（VTube Studio API 驱动，表情+面部参数）
 - 低信任 disgust 检测（love bombing 感知）
 
-## v0.6 — 语音克隆 + 产品化
+## v0.6 — 可视化 + 产品化
+- 实时仪表盘（HTTP 服务 + HTML 面板，任意角色挂载）
+- 情绪折线历史 + 氛围仪表 + 伤疤标记
+- 网页内热切换角色（furina/kokomi/columbina/default）
 - GPT-SoVITS v2ProPlus 芙宁娜声线（权重已下，API 待调通）
 - 情绪驱动语音参数（speed/pitch 随引擎通道变化）
-- 录屏+OBS 出片流程
 - 桌面双击即用的 furina_bridge.py
 
 ## v0.7 — MCP 封装

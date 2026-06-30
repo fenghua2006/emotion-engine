@@ -20,6 +20,8 @@ from engine import (
     MemoryStore, SensitizationStore, FAST_CHANNELS
 )
 
+furina_name = "芙宁娜"
+
 
 # ═══════════════════════════════════════════════
 # 蒸馏: wiki → OCEAN (内层——真实人格)

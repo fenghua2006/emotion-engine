@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>芙宁娜 TTS 合成</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: "Microsoft YaHei", sans-serif;
+  background:#0f0f16; color:#d0d0d8; height:100vh;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:20px;
+}
+h1 { color:#e0e0f0; font-size:24px; }
+.container {
+  background:#181820; border:1px solid #252535; border-radius:12px;
+  padding:24px 32px; width:500px; display:flex; flex-direction:column; gap:12px;
+}
+textarea {
+  width:100%; height:80px; background:#1a1a28; border:1px solid #333;
+  border-radius:8px; padding:12px; color:#ddd; font-size:16px; resize:vertical;
+  font-family:inherit; outline:none;
+}
+textarea:focus { border-color:#6c5ce7; }
+.controls { display:flex; gap:8px; }
+button {
+  flex:1; padding:12px; border:none; border-radius:8px; font-size:14px;
+  cursor:pointer; font-weight:600; transition:0.2s; font-family:inherit;
+}
+.btn-synth { background:#6c5ce7; color:#fff; }
+.btn-synth:hover { background:#7e6ff0; }
+.btn-synth:disabled { background:#3a3a4a; cursor:default; }
+.btn-play { background:#27ae60; color:#fff; }
+.btn-play:hover { background:#2ecc71; }
+.btn-play:disabled { background:#3a3a4a; cursor:default; }
+.status { font-size:12px; color:#555; text-align:center; min-height:18px; }
+audio { width:100%; margin-top:8px; }
+.presets { display:flex; flex-wrap:wrap; gap:6px; }
+.preset {
+  background:#2a2a3a; border:1px solid #333; color:#aaa; border-radius:6px;
+  padding:4px 10px; font-size:11px; cursor:pointer; font-family:inherit;
+  transition:0.15s;
+}
+.preset:hover { background:#3a3a4a; color:#ddd; }
+</style>
+</head>
+<body>
+<h1>🎙️ 芙宁娜 TTS 合成</h1>
+<div class="container">
+  <div class="presets">
+    <button class="preset" onclick="setText('你好，我是芙宁娜，很高兴认识你。')">自我介绍</button>
+    <button class="preset" onclick="setText('让世界热闹起来吧！为你献上！')">激动</button>
+    <button class="preset" onclick="setText('我还是没能做到……别看我。')">悲伤</button>
+    <button class="preset" onclick="setText('你说什么？我不明白你的意思。')">疑惑</button>
+    <button class="preset" onclick="setText('我不会让任何人伤害枫丹。')">坚定</button>
+    <button class="preset" onclick="setText('已经……够了。让我休息一会儿吧。')">疲惫</button>
+  </div>
+  <textarea id="text-input" placeholder="输入想让芙宁娜说的话…">你好，我是芙宁娜，很高兴认识你。</textarea>
+  <div class="controls">
+    <button class="btn-synth" id="synth-btn" onclick="synthesize()">🎤 合成</button>
+    <button class="btn-play" id="play-btn" onclick="playAudio()" disabled>▶ 播放</button>
+  </div>
+  <div class="status" id="status">输入文字，点合成</div>
+  <audio id="audio-player" controls></audio>
+</div>
+
+<script>
+const API = "/api/tts";  // 走仪表盘代理 → SoVITS
+let audioUrl = null;
+
+function setText(t) { document.getElementById("text-input").value = t; }
+
+async function synthesize() {
+  const text = document.getElementById("text-input").value.trim();
+  if (!text) return;
+  const btn = document.getElementById("synth-btn");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+  btn.textContent = "⏳ 合成中…";
+  status.textContent = "正在调 SoVITS v2ProPlus…";
+
+  try {
+    const url = API + "?text=" + encodeURIComponent(text) + "&text_lang=zh";
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const blob = await resp.blob();
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(blob);
+    const player = document.getElementById("audio-player");
+    player.src = audioUrl;
+    document.getElementById("play-btn").disabled = false;
+    status.textContent = "✅ 合成完成 — " + (blob.size/1024).toFixed(1) + "KB";
+    player.play().catch(()=>{});
+  } catch(e) {
+    status.textContent = "❌ 失败: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🎤 合成";
+  }
+}
+
+function playAudio() {
+  const player = document.getElementById("audio-player");
+  if (player.src) player.play().catch(()=>{});
+}
+</script>
+</body>
+</html>

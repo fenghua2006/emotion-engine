@@ -20,6 +20,8 @@ from engine import (
     MemoryStore, SensitizationStore, FAST_CHANNELS
 )
 
+columbina_name = "哥伦比娅"
+
 
 # ═══════════════════════════════════════════════
 # 蒸馏层: wiki → OCEAN

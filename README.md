@@ -10,7 +10,7 @@ PAD（Pleasure-Arousal-Dominance, 1974）把情绪压缩成三维坐标中的单
 
 Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时存在，这是"苦涩的微笑"，不是一个坐标点。50 年后，该有人替代它了。
 
-## v0.4 架构
+## v0.5 架构
 
 ```
                     ┌──────────────┐
@@ -48,6 +48,29 @@ cd emotion-engine
 uv run python engine.py
 uv run python characters/kokomi.py
 ```
+
+### 实时仪表盘
+
+```bash
+# 启动仪表盘（默认角色）
+uv run python dashboard/server.py
+
+# 指定角色
+uv run python dashboard/server.py --char furina
+uv run python dashboard/server.py --char kokomi
+uv run python dashboard/server.py --char columbina
+
+# 浏览器打开 http://localhost:9020
+# 网页内可热切换角色、发送事件、查看情绪折线历史
+```
+
+API 端点（供外部接入）：
+| 端点 | 说明 |
+|---|---|
+| `GET /api/state` | 当前 10 通道 felt 值 + 氛围 + dominant + 记忆 + 伤疤 |
+| `GET /api/history?n=120` | 最近 N 个数据点（折线图用） |
+| `POST /api/event` `{"text":"..."}` | 发送事件，引擎 tick |
+| `POST /api/switch` `{"character":"kokomi"}` | 热切换角色 |
 
 ## 基本用法
 

@@ -335,22 +335,21 @@ def damage_trust(state: EmotionalState, betrayal_severity: float):
 # ══════════════════════════════════════════════════════
 
 def gate_appraisal(raw_activation: Dict[Channel, float],
-                   trust: float, love: float) -> Dict[Channel, float]:
+                   trust: float, love: float,
+                   boundary_violation: bool = False) -> Dict[Channel, float]:
     """trust/love 在认知评估阶段压低负面/抬高正面。
-    v0.5: 低信任时正面事件也被打折——"我爱你"从陌生人嘴里说出来不是喜悦是警惕。
-    """
-    fear_gate    = max(0.02, 1.0 - trust * 0.9)       # trust=0.8 → fear 打 2 折
-    anger_gate   = max(0.05, 1.0 - trust * 0.7)       # trust=0.8 → anger 打 4.4 折
-    sadness_gate = max(0.05, 1.0 - love * 0.6)        # love=0.6 → sadness 打 6.4 折
-    disgust_gate = max(0.05, 1.0 - trust * 0.8)       # trust=0.8 → disgust 打 3.6 折
-    joy_boost    = 1.0 + love * 0.5                   # love=0.6 → joy 加成 30%
-    joy_trust_gate = min(1.0, trust * 1.5)            # trust=0.2 → joy 打 3 折。"我爱你"不可信
+    boundary_violation: 低信任时被越界称呼（亲密词/侮辱词）"""
+    fear_gate    = max(0.02, 1.0 - trust * 0.9)
+    anger_gate   = max(0.05, 1.0 - trust * 0.7)
+    sadness_gate = max(0.05, 1.0 - love * 0.6)
+    disgust_gate = max(0.05, 1.0 - trust * 0.8)
+    joy_boost    = 1.0 + love * 0.5
+    joy_trust_gate = min(1.0, trust * 1.5)
 
     gated = {}
     for ch, val in raw_activation.items():
         if ch == Channel.FEAR:
             gated[ch] = val * fear_gate
-            # 低信任+正面事件 → fear 上升（不对劲）
             if trust < 0.3 and raw_activation.get(Channel.JOY, 0) > 0.3:
                 gated[ch] += (0.3 - trust) * 0.5
         elif ch == Channel.ANGER:
@@ -359,11 +358,17 @@ def gate_appraisal(raw_activation: Dict[Channel, float],
             gated[ch] = val * sadness_gate
         elif ch == Channel.DISGUST:
             gated[ch] = val * disgust_gate
-            # 低信任+高正面评价 → 厌恶（"你喜欢的是我的面具"）
             if trust < 0.35 and raw_activation.get(Channel.JOY, 0) > 0.2:
                 gated[ch] += (0.35 - trust) * 0.8
+            # 低信任+越界称呼 → 厌恶飙升（"你谁啊叫我老公？"）
+            if boundary_violation and trust < 0.5:
+                gated[ch] += (0.5 - trust) * 1.2
         elif ch == Channel.JOY:
-            gated[ch] = val * joy_boost * joy_trust_gate  # trust 打折正面
+            # 低信任+越界 → joy 被压制（不是喜悦，是冒犯）
+            if boundary_violation and trust < 0.5:
+                gated[ch] = val * joy_boost * joy_trust_gate * 0.3
+            else:
+                gated[ch] = val * joy_boost * joy_trust_gate
         else:
             gated[ch] = val
     return gated
@@ -502,7 +507,7 @@ class EmotionEngine:
         # 公式: longing += love × log₁₀(1 + offline_hours) × 0.12
         #       有爱才有思念。不爱的人不在就不在。
         if offline_hours > 1 and self.state.love > 0.05:
-            longing_growth = self.state.love * math.log10(1 + offline_hours) * 0.12
+            longing_growth = self.state.love * math.log10(1 + offline_hours) * 0.4
             self.state.longing = min(self.state.longing + longing_growth, self.state.love * 2)
 
         # trust 长时间不联系微降
@@ -525,10 +530,11 @@ class EmotionEngine:
             "state":              self.state.to_dict(),
         }
 
-    def tick(self, appraisal: Optional[Appraisal] = None) -> Dict:
+    def tick(self, appraisal: Optional[Appraisal] = None,
+             boundary_violation: bool = False) -> Dict:
         """
         每次对话轮次/事件 的完整情绪更新。
-        返回: {felt_emotion, blends, shock_channels, ...}
+        boundary_violation: 低信任时的越界称呼（亲密词等）
         """
         now = time.time()
         elapsed_minutes = (now - self.state._last_update) / 60.0
@@ -573,7 +579,8 @@ class EmotionEngine:
         shock_channels = []
         if appraisal is not None:
             raw = appraise(appraisal)
-            gated = gate_appraisal(raw, self.state.trust, self.state.love)
+            gated = gate_appraisal(raw, self.state.trust, self.state.love,
+                                    boundary_violation=boundary_violation)
 
             # Step 3.5: 触发敏感化——旧伤疤放大负面情绪
             scar_shift = self.scars.get_shift(appraisal)
@@ -616,8 +623,10 @@ class EmotionEngine:
         # shock 密度高 + 当前 fear/sadness 高 → 变紧绷
         shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
         arousal_trend = (self.state.fear + self.state.sadness) / 2
-        # 向目标漂移，一次最多移 0.1
         target = -0.6 + shock_density * 1.2 + arousal_trend * 0.4
+        # 越界 → 氛围直接推向紧绷
+        if boundary_violation:
+            target += 0.3
         self.atmosphere += max(-0.1, min(0.1, target - self.atmosphere))
 
         # 氛围调制 gate：紧绷放大负面，轻松缓冲负面
@@ -638,6 +647,10 @@ class EmotionEngine:
                         gated[ch] *= (1.0 + self.atmosphere * 0.3)  # 轻松时负面缓冲
                     elif ch_name in ("joy",):
                         gated[ch] *= (1.0 - self.atmosphere * 0.2)  # 轻松时喜悦放大
+
+        # 越界惩罚：低信任时被越界称呼 → trust 降 + disgust 已由 gate 处理
+        if boundary_violation and self.state.trust < 0.5:
+            self.state.trust = max(0.01, self.state.trust - (0.5 - self.state.trust) * 0.3)
 
         # Step 5: 交互矩阵
         blends = apply_interactions(self.state)
@@ -1301,22 +1314,77 @@ def _build_llm_prompt(engine: "EmotionEngine", user_input: str,
             f"- {m.content}" for m in recent_memories[:3]
         )
 
+    dominant = _dominant_channel(s)
+    # 将数值翻译成 AI 能理解的行为指令
+    mood_hint = _mood_hint(s, dominant, engine.atmosphere)
+
     return f"""You are {character_name}. {character_desc}
 
-Your current emotional state (pre-computed, do NOT recalculate):
-  joy={s.joy:.2f} sadness={s.sadness:.2f} anger={s.anger:.2f} fear={s.fear:.2f}
-  love={s.love:.2f} trust={s.trust:.2f} guilt={s.guilt:.2f} longing={s.longing:.2f}
-  atmosphere={engine.atmosphere:.2f} (-1=relaxed +1=tense)
-  dominant={_dominant_channel(s)}
-  active_scars={scars if scars else 'none'}
+Your current emotional state:
+  {mood_hint}
+  (joy={s.joy:.1f} sad={s.sadness:.1f} anger={s.anger:.1f} fear={s.fear:.1f}
+   trust={s.trust:.1f} love={s.love:.1f} guilt={s.guilt:.1f} longing={s.longing:.1f})
 
 {mem_text}
 
 User said: "{user_input}"
 
-Respond in character. Keep it under 80 words. Match the emotional state above.
-If trust is low, be guarded. If longing is high, show it. If guilt is active, show remorse.
-Do NOT describe emotions — express them through what {character_name} says and does."""
+Respond in character. 2-3 natural Chinese sentences, spoken aloud (not narration).
+Your mood affects HOW you speak — see the mood hint above and let it color your tone."""
+
+
+def _mood_hint(s: "EmotionalState", dominant: str, atmosphere: float) -> str:
+    """将情绪数值翻译成 LLM 能理解的口吻描述"""
+    parts = []
+
+    # 主导情绪 → 核心语气
+    dom_hints = {
+        "joy_dominant":      "你很开心，语气轻快上扬，可能带笑",
+        "sadness_dominant":  "你很难过，语气低沉缓慢，话少",
+        "anger_dominant":    "你在生气，语气尖锐或冷淡，可能带刺",
+        "fear_dominant":     "你很不安，语气犹豫颤抖，回避正面回答",
+        "surprise_dominant": "你很惊讶，语气急促，可能语无伦次",
+        "longing_dominant":  "你在思念某人，语气温柔带苦涩，话尾拖长",
+        "guilt_dominant":    "你在愧疚，语气自责收敛，不敢直视",
+        "neutral":           "你心情平静，语气平稳自然",
+    }
+    if dominant in dom_hints:
+        parts.append(dom_hints[dominant])
+
+    # 信任度
+    if s.trust < 0.2:
+        parts.append("你很不信任对方，说话防备疏离。任何亲密称呼都让你反感")
+    elif s.trust > 0.7:
+        parts.append("你非常信任对方，说话坦诚放松")
+
+    # 亲密度：trust+love 双高才接受亲密
+    intimacy = (s.trust + s.love) / 2
+    if intimacy > 0.7:
+        parts.append("你和对方很亲密，可以接受亲昵称呼，甚至会回应")
+    elif intimacy < 0.3:
+        parts.append("你和对方不熟，亲密称呼让你尴尬，会冷淡拒绝")
+
+    # 爱
+    if s.love > 0.6:
+        parts.append("你很在乎对方，话里带关切")
+    elif s.love < 0.1:
+        parts.append("你不在意对方，冷淡敷衍")
+
+    # 氛围
+    if atmosphere > 0.3:
+        parts.append("氛围轻松，你比较放得开")
+    elif atmosphere < -0.3:
+        parts.append("氛围紧绷，你紧张克制")
+
+    # 愧疚
+    if s.guilt > 0.3:
+        parts.append("你做错了事，想弥补或道歉")
+
+    # 思念
+    if s.longing > 0.3:
+        parts.append("你在想一个人，话里带等待的情绪")
+
+    return "。".join(parts) + "。"
 
 
 def respond_llm(engine: "EmotionEngine", user_input: str,
@@ -1325,10 +1393,13 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
                 character_desc: str = "A person with complex emotions.",
                 api_key: Optional[str] = None,
                 base_url: str = "https://api.deepseek.com/v1",
-                model: str = "deepseek-chat") -> Dict:
+                model: str = "deepseek-chat",
+                fallback_key: Optional[str] = None,
+                fallback_url: str = "https://api.moonshot.cn/v1",
+                fallback_model: str = "moonshot-v1-8k") -> Dict:
     """
     LLM 增强回应——引擎算情绪，LLM 写表达。
-    如果 API 调用失败 → 自动回退到本地模板。
+    主 API 失败 → fallback API → 都失败则回退到本地模板。
     """
     # 先跑情绪引擎
     local = respond(engine, user_input, character_id=character_id)
@@ -1340,29 +1411,41 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
     prompt = _build_llm_prompt(engine, user_input, character_name,
                                character_desc, recent)
 
-    # 尝试 LLM
-    try:
-        import urllib.request, urllib.error
-        data = json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 50,
-            "temperature": 0.7,
-        }).encode("utf-8")
+    # 按顺序尝试 API：主 → fallback
+    backends = [
+        (api_key or os.environ.get('DEEPSEEK_API_KEY', ''), base_url, model, "DeepSeek"),
+    ]
+    if fallback_key:
+        backends.append((fallback_key, fallback_url, fallback_model, "Kimi"))
 
-        req = urllib.request.Request(
-            f"{base_url}/chat/completions",
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key or os.environ.get('DEEPSEEK_API_KEY', '')}"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            llm_text = body["choices"][0]["message"]["content"].strip()
-    except Exception:
-        llm_text = None  # 回退
+    llm_text = None
+    for key, url, mdl, tag in backends:
+        if not key:
+            continue
+        try:
+            import urllib.request, urllib.error
+            data = json.dumps({
+                "model": mdl,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 200,
+                "temperature": 0.7,
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                f"{url}/chat/completions",
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {key}"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                llm_text = body["choices"][0]["message"]["content"].strip()
+                local["_llm_backend"] = tag
+                break  # 成功，跳出
+        except Exception:
+            continue  # 试下一个
 
     local["_llm_used"] = llm_text is not None
     if llm_text:

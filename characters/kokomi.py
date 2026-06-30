@@ -15,6 +15,8 @@ from engine import (
     MemoryStore, SensitizationStore, FAST_CHANNELS
 )
 
+kokomi_name = "珊瑚宫心海"
+
 
 # ═══════════════════════════════════════════════
 # 蒸馏层: wiki → OCEAN
