@@ -190,7 +190,7 @@ def load_from_disk():
     # 结算离线时间
     engine.wake()
 
-    print(f"📂 存档已恢复 — {char_name}，离线 {round((time.time()-engine.state._last_update)/3600,1)}h")
+    print(f"[save] 存档已恢复 - {char_name}，离线 {round((time.time()-engine.state._last_update)/3600,1)}h")
     return engine, appraise_fn, char_name, char_id
 
 

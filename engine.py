@@ -215,60 +215,61 @@ def return_to_baseline(current: float, baseline: float,
 # 交互矩阵
 # ══════════════════════════════════════════════════════
 
+# v0.4: 移除 sadness/fear→anger——愤怒只来自负面事件+厌恶转化，不被悲伤/恐惧推高
 INTERACTION_RULES: Dict[Tuple[Channel, Channel], Tuple[str, float]] = {
     # (通道A, 通道B) → (效应, 强度)
-    (Channel.SADNESS, Channel.ANGER):      ("amplify_anger",   0.3),   # 委屈：愤怒带水
-    (Channel.ANGER,   Channel.TRUST):      ("suppress_trust",  0.1),   # 愤怒暂时压信任
+    (Channel.ANGER,   Channel.TRUST):      ("suppress_trust",  0.08),  # 愤怒暂时压信任
     (Channel.TRUST,   Channel.FEAR):       ("suppress_fear",   0.15),  # 信任降低恐惧
-    (Channel.FEAR,    Channel.ANGER):      ("amplify_anger",   0.2),   # 防御性攻击
     (Channel.LOVE,    Channel.FEAR):       ("blend",           0.0),   # 怕失去 (标记)
     (Channel.JOY,     Channel.SADNESS):    ("blend",           0.0),   # 苦涩的微笑 (标记)
-    (Channel.SURPRISE, Channel.FEAR):      ("amplify_fear",    0.4),
-    (Channel.SURPRISE, Channel.JOY):       ("amplify_joy",     0.25),
-    (Channel.DISGUST, Channel.ANGER):      ("amplify_anger",   0.35),  # 道德愤怒
+    (Channel.SURPRISE, Channel.FEAR):      ("amplify_fear",    0.25),
+    (Channel.SURPRISE, Channel.JOY):       ("amplify_joy",     0.15),
+    (Channel.DISGUST, Channel.ANGER):      ("amplify_anger",   0.25),  # 道德愤怒——厌恶才转化愤怒
     (Channel.LOVE,    Channel.TRUST):      ("amplify_trust",   0.02),  # 慢调制——非常微弱
     (Channel.GUILT,   Channel.TRUST):      ("amplify_trust",   0.1),   # 愧疚→包容信任（需要被原谅）
     (Channel.GUILT,   Channel.ANGER):      ("suppress_anger",  0.3),   # 愧疚压制愤怒（是我的错不是你）
-    (Channel.GUILT,   Channel.SADNESS):    ("amplify_sadness",  0.2),  # 愧疚加深悲伤（后悔）
+    (Channel.GUILT,   Channel.SADNESS):    ("amplify_sadness",  0.15), # 愧疚加深悲伤（后悔）
     (Channel.GUILT,   Channel.LOVE):       ("amplify_love",    0.05),  # 愧疚→更用力去爱（弥补）
 }
 
 
 def apply_interactions(state: EmotionalState) -> List[str]:
     """应用交互矩阵。返回触发的混合标签。
-    v0.2: 不用 min(1.0, ...)，用 tanh 自然饱和。
+    v0.4: 绝对值驱动但强度已校准——连续混合下 4-6 通道同时激活，总交互量需匹配。
     """
+    snap = {ch.value: getattr(state, ch.value) for ch in Channel}
     blends = []
+    deltas = {ch.value: 0.0 for ch in Channel}
+
     for (a, b), (effect, strength) in INTERACTION_RULES.items():
-        va = getattr(state, a.value)
-        vb = getattr(state, b.value)
-        if va < 0.15 or vb < 0.15:
+        va = snap[a.value]
+        vb = snap[b.value]
+        if va < 0.05 or vb < 0.05:
             continue
 
         if effect == "amplify_joy":
-            amp = vb * strength
-            state.joy = state.joy + amp * saturate(state.joy)
+            deltas["joy"] += va * strength * saturate(snap["joy"])
         elif effect == "amplify_anger":
-            amp = vb * strength
-            state.anger = state.anger + amp * saturate(state.anger)
+            deltas["anger"] += va * strength * saturate(snap["anger"])
         elif effect == "amplify_fear":
-            amp = vb * strength
-            state.fear = state.fear + amp * saturate(state.fear)
+            deltas["fear"] += va * strength * saturate(snap["fear"])
         elif effect == "amplify_sadness":
-            amp = vb * strength
-            state.sadness = state.sadness + amp * saturate(state.sadness)
+            deltas["sadness"] += va * strength * saturate(snap["sadness"])
         elif effect == "amplify_love":
-            amp = strength
-            state.love = state.love + amp * saturate(state.love, asymptote=2.0)
+            deltas["love"] += strength * saturate(snap["love"], asymptote=2.0)
         elif effect == "amplify_trust":
-            amp = strength
-            state.trust = state.trust + amp * saturate(state.trust)
+            deltas["trust"] += strength * saturate(snap["trust"])
         elif effect.startswith("suppress"):
             target = effect.split("_")[1]
-            current = getattr(state, target)
-            setattr(state, target, max(0.0, current - va * strength))
+            deltas[target] -= snap[a.value] * strength
         elif effect == "blend":
             blends.append(f"{a.value}+{b.value}")
+
+    # 统一应用所有交互增量
+    for ch_name, delta in deltas.items():
+        if delta != 0:
+            current = getattr(state, ch_name)
+            setattr(state, ch_name, max(0.0, current + delta))
 
     return blends
 
@@ -390,24 +391,41 @@ class Appraisal:
 
 
 def appraise(app: Appraisal) -> Dict[Channel, float]:
-    """认知评估 → 通道原始激活（门控前）"""
-    gc = app.goal_conduciveness
-    gr = app.goal_relevance
-    cp = app.coping_potential
-    ue = 1.0 - app.expectedness  # 意外程度
-
-    self_agency = 1.0 - app.other_agency  # 我的责任 = 不是别人的
+    """认知评估 → 通道原始激活（门控前）
+    v0.4: 连续混合替代二元门控——每个通道都有非零激活。
+    评鉴维度调制强度，不闸断开/关。正面事件也有微量负面通道（bittersweet），
+    负面事件也有正面痕迹。惊讶几乎总伴随所有情绪。
+    论文依据: Vanderbilt 混合情绪——各组分互不消灭。
+    """
+    gc = app.goal_conduciveness       # -1 ~ +1
+    gr = app.goal_relevance           # 0 ~ 1
+    cp = app.coping_potential         # 0 ~ 1
+    ue = 1.0 - app.expectedness       # 意外程度 0~1
+    other = app.other_agency          # 0 ~ 1
+    self_agency = 1.0 - other         # 0 ~ 1
+    se = app.social_evaluation        # -1 ~ +1
 
     return {
-        Channel.JOY:      gc * gr if gc > 0 else 0.0,
-        Channel.SADNESS:  -gc * gr * (1.0 - cp) if gc < 0 else 0.0,
-        Channel.ANGER:    -gc * app.other_agency * cp if gc < 0 else 0.0,
-        Channel.FEAR:     -gc * gr * (1.0 - cp) * ue if gc < 0 else 0.0,
-        Channel.DISGUST:  -app.social_evaluation * app.other_agency if app.social_evaluation < 0 else 0.0,
-        # 低信任+高正面评价 → 厌恶（"你说喜欢我？你喜欢的只是面具吧"）
-        Channel.SURPRISE: ue * gr,
-        Channel.GUILT:    -gc * gr * self_agency if gc < 0 and self_agency > 0.3 else 0.0,
-        # 愧疚 = 坏事发生了 + 是我的责任（自己造成的）
+        # 喜悦：正面事件 + 高应对 + 正面社交反馈
+        Channel.JOY:      gr * (max(0, gc) * 0.6 + cp * 0.15 + max(0, se) * 0.1),
+
+        # 悲伤：负面事件 + 低应对 + 意外（连好事也可能 bittersweet）
+        Channel.SADNESS:  gr * (max(0, -gc) * 0.5 + max(0, gc) * 0.05 + (1 - cp) * 0.15 + ue * 0.1),
+
+        # 愤怒：必须负面事件才激活。外部归因 + 挫败感只放大，不创造
+        Channel.ANGER:    gr * max(0, -gc) * (other * 0.4 + 0.15 + (1 - cp) * ue * 0.1),
+
+        # 恐惧：意外 × 低应对 + 不确定性
+        Channel.FEAR:     gr * (max(0, -gc) * (ue * 0.4 + (1 - cp) * 0.2) + ue * (1 - cp) * 0.15),
+
+        # 厌恶：负面社交评价 + 外部归因
+        Channel.DISGUST:  gr * (max(0, -se) * 0.5 + max(0, -gc) * other * 0.2),
+
+        # 惊讶：意外 × 相关性（始终激活——任何偏差都有惊讶成分）
+        Channel.SURPRISE: gr * ue * 0.6 + abs(gc) * ue * 0.2,
+
+        # 愧疚：我的责任 × 负面事件 × 我能控制（本可避免）
+        Channel.GUILT:    gr * max(0, -gc) * self_agency * (0.3 + cp * 0.2),
     }
 
 
@@ -586,7 +604,7 @@ class EmotionEngine:
             scar_shift = self.scars.get_shift(appraisal)
             if scar_shift > 0.01 and appraisal.goal_conduciveness < 0:
                 for ch in (Channel.SADNESS, Channel.FEAR, Channel.ANGER):
-                    if ch in gated and gated[ch] > 0.01:
+                    if ch in gated and gated[ch] > 0.001:
                         gated[ch] *= (1.0 + scar_shift)  # 旧伤疤让负面放大 0~60%
 
             # 登记触发 / 正面反例
@@ -597,7 +615,7 @@ class EmotionEngine:
                 self.scars.register_positive(tag)
 
             for ch in FAST_CHANNELS:
-                if ch in gated and gated[ch] > 0.01:
+                if ch in gated and gated[ch] > 0.001:
                     current = getattr(self.state, ch.value)
                     # 自然饱和：值越高增量越小（无硬上限）
                     saturation = saturate(current)
@@ -633,7 +651,7 @@ class EmotionEngine:
         # atmosphere > 0: 负面放大, 正面削弱；< 0: 反之
         if self.atmosphere > 0 and appraisal is not None:
             for ch in FAST_CHANNELS:
-                if ch in gated and gated[ch] > 0.01:
+                if ch in gated and gated[ch] > 0.001:
                     ch_name = ch.value
                     if ch_name in ("joy",):
                         gated[ch] *= (1.0 - self.atmosphere * 0.3)  # 紧绷时喜悦打折
@@ -641,7 +659,7 @@ class EmotionEngine:
                         gated[ch] *= (1.0 + self.atmosphere * 0.4)  # 紧绷时负面放大
         elif self.atmosphere < 0 and appraisal is not None:
             for ch in FAST_CHANNELS:
-                if ch in gated and gated[ch] > 0.01:
+                if ch in gated and gated[ch] > 0.001:
                     ch_name = ch.value
                     if ch_name in ("sadness", "fear", "anger"):
                         gated[ch] *= (1.0 + self.atmosphere * 0.3)  # 轻松时负面缓冲
