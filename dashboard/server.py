@@ -137,6 +137,7 @@ def save_to_disk():
         "last_update": engine.state._last_update,
         "events_today": engine.events_today,
         "positive_events": engine.positive_events,
+        "tolerance": engine.tolerance.to_dict(),
         "scars": {tag: {"count": p.trigger_count, "shift": p.threshold_shift,
                         "positive": p.positive_counter, "last": p.last_triggered}
                   for tag, p in engine.scars.patterns.items()},
@@ -171,6 +172,9 @@ def load_from_disk():
     engine.atmosphere = data.get("atmosphere", -0.3)
     engine.events_today = data.get("events_today", 0)
     engine.positive_events = data.get("positive_events", 0)
+    if "tolerance" in data:
+        from tolerance import ToleranceState
+        engine.tolerance = ToleranceState.from_dict(data["tolerance"])
 
     # 恢复伤疤
     for tag, s in data.get("scars", {}).items():
@@ -187,10 +191,11 @@ def load_from_disk():
     _state["custom_desc"] = data.get("custom_desc", "")
     _state["custom_api_key"] = data.get("custom_api_key", "")
 
-    # 结算离线时间
+    # 结算离线时间（wake 会改写 _last_update，所以先算）
+    offline_hours = max(0.0, (time.time() - engine.state._last_update) / 3600.0)
     engine.wake()
 
-    print(f"[save] 存档已恢复 - {char_name}，离线 {round((time.time()-engine.state._last_update)/3600,1)}h")
+    print(f"[save] 存档已恢复 - {char_name}，离线 {round(offline_hours, 1)}h")
     return engine, appraise_fn, char_name, char_id
 
 
@@ -319,6 +324,7 @@ def build_state_response() -> dict:
         "raw": s.to_dict(),
         "felt": felt,
         "atmosphere": round(-engine.atmosphere, 3),  # 翻转：正值=轻松，负值=紧绷
+        "tolerance": engine.tolerance.to_dict(),
         "dominant": dom or "neutral",
         "dominant_value": round(getattr(s, dom.replace("_dominant", ""), 0), 3) if dom and dom.replace("_dominant", "") in s.to_dict() else 0,
         "shock_channels": [],

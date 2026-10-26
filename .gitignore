@@ -3,5 +3,10 @@ __pycache__/
 .venv/
 uv.lock
 *.db
+*.db-shm
+*.db-wal
 *_save.json
 *_log.json
+
+# Obsidian workspace config (local only)
+.obsidian/

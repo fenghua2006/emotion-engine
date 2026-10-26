@@ -1,0 +1,2351 @@
+{
+  "meta": {
+    "layer": "L1",
+    "description": "六条快通道参考线；固定人格、固定 trust/love、固定 10 分钟步长。",
+    "personality": {
+      "openness": 0.5,
+      "conscientiousness": 0.5,
+      "extraversion": 0.5,
+      "agreeableness": 0.5,
+      "neuroticism": 0.5
+    },
+    "trust": 0.5,
+    "love": 0.5,
+    "elapsed_minutes": 10.0,
+    "channels": [
+      "joy",
+      "sadness",
+      "anger",
+      "fear",
+      "disgust",
+      "surprise"
+    ],
+    "dominant_threshold": 0.3,
+    "event_count": 46,
+    "interaction_mode": "relative_to_baseline",
+    "generated_by": "scripts/generate_l1_golden.py",
+    "note": "golden 是当前行为基线，不是理论正确值；变更必须人工审阅。"
+  },
+  "isolated": {
+    "furina.alone": {
+      "values": {
+        "joy": 0.7636484375,
+        "sadness": 0.1551875,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.4995,
+        "sadness": 0.045,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.46828125,
+        "sadness": 0.0315,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "furina.understood": {
+      "values": {
+        "joy": 0.9180573125,
+        "sadness": 0.292708333333,
+        "anger": 0.055,
+        "fear": 0.3186771129,
+        "disgust": 0.06,
+        "surprise": 0.7612
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "fear",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.6,
+        "sadness": 0.25,
+        "anger": 0.0,
+        "fear": 0.108,
+        "disgust": 0.0,
+        "surprise": 0.684
+      },
+      "gated_appraisal": {
+        "joy": 0.5625,
+        "sadness": 0.175,
+        "anger": 0.0,
+        "fear": 0.0594,
+        "disgust": 0.0,
+        "surprise": 0.684
+      }
+    },
+    "furina.no_more_performance": {
+      "values": {
+        "joy": 1.001748453125,
+        "sadness": 0.292708333333,
+        "anger": 0.055,
+        "fear": 0.331939399812,
+        "disgust": 0.06,
+        "surprise": 0.834666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "fear",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.695,
+        "sadness": 0.25,
+        "anger": 0.0,
+        "fear": 0.09975,
+        "disgust": 0.0,
+        "surprise": 0.76
+      },
+      "gated_appraisal": {
+        "joy": 0.6515625,
+        "sadness": 0.175,
+        "anger": 0.0,
+        "fear": 0.0548625,
+        "disgust": 0.0,
+        "surprise": 0.76
+      }
+    },
+    "furina.helped_troupe": {
+      "values": {
+        "joy": 0.678824670312,
+        "sadness": 0.179002083333,
+        "anger": 0.055,
+        "fear": 0.11168745,
+        "disgust": 0.06,
+        "surprise": 0.3088
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.3675,
+        "sadness": 0.0805,
+        "anger": 0.0,
+        "fear": 0.0126,
+        "disgust": 0.0,
+        "surprise": 0.216
+      },
+      "gated_appraisal": {
+        "joy": 0.34453125,
+        "sadness": 0.05635,
+        "anger": 0.0,
+        "fear": 0.00693,
+        "disgust": 0.0,
+        "surprise": 0.216
+      }
+    },
+    "furina.forced_performance": {
+      "values": {
+        "joy": 0.461796875,
+        "sadness": 0.2699,
+        "anger": 0.129081475,
+        "fear": 0.1221963,
+        "disgust": 0.0822264,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.135,
+        "sadness": 0.216,
+        "anger": 0.1161,
+        "fear": 0.0324,
+        "disgust": 0.0378,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.1265625,
+        "sadness": 0.1512,
+        "anger": 0.075465,
+        "fear": 0.01782,
+        "disgust": 0.02268,
+        "surprise": 0.0
+      }
+    },
+    "furina.trial": {
+      "values": {
+        "joy": 0.362421875,
+        "sadness": 0.4973125,
+        "anger": 0.3994814691,
+        "fear": 0.437635058647,
+        "disgust": 0.37752,
+        "surprise": 0.600733333333
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.015,
+        "sadness": 0.555,
+        "anger": 0.4291,
+        "fear": 0.4165,
+        "disgust": 0.54,
+        "surprise": 0.518
+      },
+      "gated_appraisal": {
+        "joy": 0.0140625,
+        "sadness": 0.3885,
+        "anger": 0.278915,
+        "fear": 0.229075,
+        "disgust": 0.324,
+        "surprise": 0.518
+      }
+    },
+    "furina.secret_risk": {
+      "values": {
+        "joy": 0.37484375,
+        "sadness": 0.433583333333,
+        "anger": 0.243761732247,
+        "fear": 0.296588784,
+        "disgust": 0.24228,
+        "surprise": 0.3784
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.03,
+        "sadness": 0.46,
+        "anger": 0.2292,
+        "fear": 0.24,
+        "disgust": 0.31,
+        "surprise": 0.288
+      },
+      "gated_appraisal": {
+        "joy": 0.028125,
+        "sadness": 0.322,
+        "anger": 0.14898,
+        "fear": 0.132,
+        "disgust": 0.186,
+        "surprise": 0.288
+      }
+    },
+    "furina.stared_at": {
+      "values": {
+        "joy": 0.387265625,
+        "sadness": 0.188729166667,
+        "anger": 0.090094583333,
+        "fear": 0.111369,
+        "disgust": 0.07176,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.045,
+        "sadness": 0.095,
+        "anger": 0.055,
+        "fear": 0.012,
+        "disgust": 0.02,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.0421875,
+        "sadness": 0.0665,
+        "anger": 0.03575,
+        "fear": 0.0066,
+        "disgust": 0.012,
+        "surprise": 0.0
+      }
+    },
+    "furina.lonely_memory": {
+      "values": {
+        "joy": 0.387265625,
+        "sadness": 0.363145833333,
+        "anger": 0.102218166667,
+        "fear": 0.281597049285,
+        "disgust": 0.06,
+        "surprise": 0.428666666667
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.045,
+        "sadness": 0.355,
+        "anger": 0.074,
+        "fear": 0.1885,
+        "disgust": 0.0,
+        "surprise": 0.34
+      },
+      "gated_appraisal": {
+        "joy": 0.0421875,
+        "sadness": 0.2485,
+        "anger": 0.0481,
+        "fear": 0.103675,
+        "disgust": 0.0,
+        "surprise": 0.34
+      }
+    },
+    "furina.performance_mode": {
+      "values": {
+        "joy": 0.60175,
+        "sadness": 0.14915,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.304,
+        "sadness": 0.036,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.285,
+        "sadness": 0.0252,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "furina.alone_after_show": {
+      "values": {
+        "joy": 0.6518515625,
+        "sadness": 0.1672625,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.3645,
+        "sadness": 0.063,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.34171875,
+        "sadness": 0.0441,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "kokomi.alone_reading": {
+      "values": {
+        "joy": 0.81395703125,
+        "sadness": 0.153678125,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.56025,
+        "sadness": 0.04275,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.525234375,
+        "sadness": 0.029925,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "kokomi.praised_by_trusted": {
+      "values": {
+        "joy": 0.674427355547,
+        "sadness": 0.221264583333,
+        "anger": 0.055,
+        "fear": 0.1323070875,
+        "disgust": 0.06,
+        "surprise": 0.4654
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.3395,
+        "sadness": 0.1435,
+        "anger": 0.0,
+        "fear": 0.05145,
+        "disgust": 0.0,
+        "surprise": 0.378
+      },
+      "gated_appraisal": {
+        "joy": 0.31828125,
+        "sadness": 0.10045,
+        "anger": 0.0,
+        "fear": 0.0282975,
+        "disgust": 0.0,
+        "surprise": 0.378
+      }
+    },
+    "kokomi.helped_people": {
+      "values": {
+        "joy": 0.916063949375,
+        "sadness": 0.18839375,
+        "anger": 0.055,
+        "fear": 0.109299075,
+        "disgust": 0.06,
+        "surprise": 0.3088
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.657,
+        "sadness": 0.0945,
+        "anger": 0.0,
+        "fear": 0.0081,
+        "disgust": 0.0,
+        "surprise": 0.216
+      },
+      "gated_appraisal": {
+        "joy": 0.6159375,
+        "sadness": 0.06615,
+        "anger": 0.0,
+        "fear": 0.004455,
+        "disgust": 0.0,
+        "surprise": 0.216
+      }
+    },
+    "kokomi.public_speech": {
+      "values": {
+        "joy": 0.431984375,
+        "sadness": 0.2880125,
+        "anger": 0.087733675,
+        "fear": 0.1279284,
+        "disgust": 0.0631752,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.099,
+        "sadness": 0.243,
+        "anger": 0.0513,
+        "fear": 0.0432,
+        "disgust": 0.0054,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.0928125,
+        "sadness": 0.1701,
+        "anger": 0.033345,
+        "fear": 0.02376,
+        "disgust": 0.00324,
+        "surprise": 0.0
+      }
+    },
+    "kokomi.soldier_lost": {
+      "values": {
+        "joy": 0.362421875,
+        "sadness": 0.550979166667,
+        "anger": 0.352088654558,
+        "fear": 0.406465209906,
+        "disgust": 0.270504,
+        "surprise": 0.477
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.015,
+        "sadness": 0.635,
+        "anger": 0.3915,
+        "fear": 0.4095,
+        "disgust": 0.358,
+        "surprise": 0.39
+      },
+      "gated_appraisal": {
+        "joy": 0.0140625,
+        "sadness": 0.4445,
+        "anger": 0.254475,
+        "fear": 0.225225,
+        "disgust": 0.2148,
+        "surprise": 0.39
+      }
+    },
+    "kokomi.leadership_criticized": {
+      "values": {
+        "joy": 0.372359375,
+        "sadness": 0.4329125,
+        "anger": 0.347542506247,
+        "fear": 0.295513408587,
+        "disgust": 0.319308,
+        "surprise": 0.362933333333
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.027,
+        "sadness": 0.459,
+        "anger": 0.36666,
+        "fear": 0.2448,
+        "disgust": 0.441,
+        "surprise": 0.272
+      },
+      "gated_appraisal": {
+        "joy": 0.0253125,
+        "sadness": 0.3213,
+        "anger": 0.238329,
+        "fear": 0.13464,
+        "disgust": 0.2646,
+        "surprise": 0.272
+      }
+    },
+    "kokomi.unfamiliar_social": {
+      "values": {
+        "joy": 0.372359375,
+        "sadness": 0.2437375,
+        "anger": 0.08593428,
+        "fear": 0.2124983945,
+        "disgust": 0.067056,
+        "surprise": 0.332
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.027,
+        "sadness": 0.177,
+        "anger": 0.04848,
+        "fear": 0.099,
+        "disgust": 0.012,
+        "surprise": 0.24
+      },
+      "gated_appraisal": {
+        "joy": 0.0253125,
+        "sadness": 0.1239,
+        "anger": 0.031512,
+        "fear": 0.05445,
+        "disgust": 0.0072,
+        "surprise": 0.24
+      }
+    },
+    "kokomi.battle_plan": {
+      "values": {
+        "joy": 0.746867726562,
+        "sadness": 0.168604166667,
+        "anger": 0.055,
+        "fear": 0.10659225,
+        "disgust": 0.06,
+        "surprise": 0.167666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.47,
+        "sadness": 0.065,
+        "anger": 0.0,
+        "fear": 0.003,
+        "disgust": 0.0,
+        "surprise": 0.07
+      },
+      "gated_appraisal": {
+        "joy": 0.440625,
+        "sadness": 0.0455,
+        "anger": 0.0,
+        "fear": 0.00165,
+        "disgust": 0.0,
+        "surprise": 0.07
+      }
+    },
+    "kokomi.alone_with_traveler": {
+      "values": {
+        "joy": 0.552693338021,
+        "sadness": 0.1833625,
+        "anger": 0.055,
+        "fear": 0.116941875,
+        "disgust": 0.06,
+        "surprise": 0.312666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.213,
+        "sadness": 0.087,
+        "anger": 0.0,
+        "fear": 0.0225,
+        "disgust": 0.0,
+        "surprise": 0.22
+      },
+      "gated_appraisal": {
+        "joy": 0.1996875,
+        "sadness": 0.0609,
+        "anger": 0.0,
+        "fear": 0.012375,
+        "disgust": 0.0,
+        "surprise": 0.22
+      }
+    },
+    "columbina.alone": {
+      "values": {
+        "joy": 0.625765625,
+        "sadness": 0.145125,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.333,
+        "sadness": 0.03,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.3121875,
+        "sadness": 0.021,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "columbina.with_traveler": {
+      "values": {
+        "joy": 0.668296645417,
+        "sadness": 0.224283333333,
+        "anger": 0.055,
+        "fear": 0.1317498,
+        "disgust": 0.06,
+        "surprise": 0.492466666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.328,
+        "sadness": 0.148,
+        "anger": 0.0,
+        "fear": 0.0504,
+        "disgust": 0.0,
+        "surprise": 0.406
+      },
+      "gated_appraisal": {
+        "joy": 0.3075,
+        "sadness": 0.1036,
+        "anger": 0.0,
+        "fear": 0.02772,
+        "disgust": 0.0,
+        "surprise": 0.406
+      }
+    },
+    "columbina.traveler_trusts": {
+      "values": {
+        "joy": 0.815192417083,
+        "sadness": 0.257825,
+        "anger": 0.055,
+        "fear": 0.1451247,
+        "disgust": 0.06,
+        "surprise": 0.625866666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.4905,
+        "sadness": 0.198,
+        "anger": 0.0,
+        "fear": 0.0756,
+        "disgust": 0.0,
+        "surprise": 0.544
+      },
+      "gated_appraisal": {
+        "joy": 0.45984375,
+        "sadness": 0.1386,
+        "anger": 0.0,
+        "fear": 0.04158,
+        "disgust": 0.0,
+        "surprise": 0.544
+      }
+    },
+    "columbina.inherit_power": {
+      "values": {
+        "joy": 0.806015478125,
+        "sadness": 0.2356875,
+        "anger": 0.055,
+        "fear": 0.126495375,
+        "disgust": 0.06,
+        "surprise": 0.7264
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.465,
+        "sadness": 0.165,
+        "anger": 0.0,
+        "fear": 0.0405,
+        "disgust": 0.0,
+        "surprise": 0.648
+      },
+      "gated_appraisal": {
+        "joy": 0.4359375,
+        "sadness": 0.1155,
+        "anger": 0.0,
+        "fear": 0.022275,
+        "disgust": 0.0,
+        "surprise": 0.648
+      }
+    },
+    "columbina.followers_demand": {
+      "values": {
+        "joy": 0.3760859375,
+        "sadness": 0.27291875,
+        "anger": 0.172083498114,
+        "fear": 0.1356508125,
+        "disgust": 0.134088,
+        "surprise": 0.148333333333
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0315,
+        "sadness": 0.2205,
+        "anger": 0.15596,
+        "fear": 0.05775,
+        "disgust": 0.126,
+        "surprise": 0.05
+      },
+      "gated_appraisal": {
+        "joy": 0.02953125,
+        "sadness": 0.15435,
+        "anger": 0.101374,
+        "fear": 0.0317625,
+        "disgust": 0.0756,
+        "surprise": 0.05
+      }
+    },
+    "columbina.betrayed": {
+      "values": {
+        "joy": 0.441005278646,
+        "sadness": 0.43593125,
+        "anger": 0.351389195495,
+        "fear": 0.281420717783,
+        "disgust": 0.2949648,
+        "surprise": 0.370666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.0675,
+        "sadness": 0.4635,
+        "anger": 0.3816,
+        "fear": 0.2142,
+        "disgust": 0.3996,
+        "surprise": 0.28
+      },
+      "gated_appraisal": {
+        "joy": 0.06328125,
+        "sadness": 0.32445,
+        "anger": 0.24804,
+        "fear": 0.11781,
+        "disgust": 0.23976,
+        "surprise": 0.28
+      }
+    },
+    "columbina.imprisoned": {
+      "values": {
+        "joy": 0.4783070375,
+        "sadness": 0.40675,
+        "anger": 0.257091522358,
+        "fear": 0.3225458172,
+        "disgust": 0.116448,
+        "surprise": 0.5176
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.09,
+        "sadness": 0.42,
+        "anger": 0.2964,
+        "fear": 0.228,
+        "disgust": 0.096,
+        "surprise": 0.432
+      },
+      "gated_appraisal": {
+        "joy": 0.084375,
+        "sadness": 0.294,
+        "anger": 0.19266,
+        "fear": 0.1254,
+        "disgust": 0.0576,
+        "surprise": 0.432
+      }
+    },
+    "columbina.facing_dissolution": {
+      "values": {
+        "joy": 0.3996875,
+        "sadness": 0.534208333333,
+        "anger": 0.292110489322,
+        "fear": 0.446964422788,
+        "disgust": 0.11292,
+        "surprise": 0.6278
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.06,
+        "sadness": 0.61,
+        "anger": 0.3528,
+        "fear": 0.423,
+        "disgust": 0.09,
+        "surprise": 0.546
+      },
+      "gated_appraisal": {
+        "joy": 0.05625,
+        "sadness": 0.427,
+        "anger": 0.22932,
+        "fear": 0.23265,
+        "disgust": 0.054,
+        "surprise": 0.546
+      }
+    },
+    "columbina.hurt_trusted": {
+      "values": {
+        "joy": 0.3835390625,
+        "sadness": 0.39970625,
+        "anger": 0.174499619013,
+        "fear": 0.301225300803,
+        "disgust": 0.1785408,
+        "surprise": 0.419
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0405,
+        "sadness": 0.4095,
+        "anger": 0.1431,
+        "fear": 0.23085,
+        "disgust": 0.2016,
+        "surprise": 0.33
+      },
+      "gated_appraisal": {
+        "joy": 0.03796875,
+        "sadness": 0.28665,
+        "anger": 0.093015,
+        "fear": 0.1269675,
+        "disgust": 0.12096,
+        "surprise": 0.33
+      }
+    },
+    "columbina.public_gaze": {
+      "values": {
+        "joy": 0.3760859375,
+        "sadness": 0.15418125,
+        "anger": 0.0619870125,
+        "fear": 0.1127224125,
+        "disgust": 0.061764,
+        "surprise": 0.196666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0315,
+        "sadness": 0.0435,
+        "anger": 0.01095,
+        "fear": 0.01455,
+        "disgust": 0.003,
+        "surprise": 0.1
+      },
+      "gated_appraisal": {
+        "joy": 0.02953125,
+        "sadness": 0.03045,
+        "anger": 0.0071175,
+        "fear": 0.0080025,
+        "disgust": 0.0018,
+        "surprise": 0.1
+      }
+    },
+    "columbina.singing": {
+      "values": {
+        "joy": 0.470629821875,
+        "sadness": 0.156864583333,
+        "anger": 0.055,
+        "fear": 0.1081845,
+        "disgust": 0.06,
+        "surprise": 0.1696
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.135,
+        "sadness": 0.0475,
+        "anger": 0.0,
+        "fear": 0.006,
+        "disgust": 0.0,
+        "surprise": 0.072
+      },
+      "gated_appraisal": {
+        "joy": 0.1265625,
+        "sadness": 0.03325,
+        "anger": 0.0,
+        "fear": 0.0033,
+        "disgust": 0.0,
+        "surprise": 0.072
+      }
+    },
+    "engine.praised_by_friend": {
+      "values": {
+        "joy": 0.751513774193,
+        "sadness": 0.211872916667,
+        "anger": 0.055,
+        "fear": 0.1245050625,
+        "disgust": 0.06,
+        "surprise": 0.492466666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.4305,
+        "sadness": 0.1295,
+        "anger": 0.0,
+        "fear": 0.03675,
+        "disgust": 0.0,
+        "surprise": 0.406
+      },
+      "gated_appraisal": {
+        "joy": 0.40359375,
+        "sadness": 0.09065,
+        "anger": 0.0,
+        "fear": 0.0202125,
+        "disgust": 0.0,
+        "surprise": 0.406
+      }
+    },
+    "engine.stood_up": {
+      "values": {
+        "joy": 0.369875,
+        "sadness": 0.420166666667,
+        "anger": 0.273638393548,
+        "fear": 0.396769597653,
+        "disgust": 0.1192704,
+        "surprise": 0.579466666667
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.024,
+        "sadness": 0.44,
+        "anger": 0.32144,
+        "fear": 0.3456,
+        "disgust": 0.1008,
+        "surprise": 0.496
+      },
+      "gated_appraisal": {
+        "joy": 0.0225,
+        "sadness": 0.308,
+        "anger": 0.208936,
+        "fear": 0.19008,
+        "disgust": 0.06048,
+        "surprise": 0.496
+      }
+    },
+    "engine.hurt_friend": {
+      "values": {
+        "joy": 0.3996875,
+        "sadness": 0.363816666667,
+        "anger": 0.180385085268,
+        "fear": 0.31801823985,
+        "disgust": 0.1945344,
+        "surprise": 0.506
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.06,
+        "sadness": 0.356,
+        "anger": 0.1464,
+        "fear": 0.2244,
+        "disgust": 0.2288,
+        "surprise": 0.42
+      },
+      "gated_appraisal": {
+        "joy": 0.05625,
+        "sadness": 0.2492,
+        "anger": 0.09516,
+        "fear": 0.12342,
+        "disgust": 0.13728,
+        "surprise": 0.42
+      }
+    },
+    "synthetic.routine_notice": {
+      "values": {
+        "joy": 0.3599375,
+        "sadness": 0.1270125,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.012,
+        "sadness": 0.003,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.01125,
+        "sadness": 0.0021,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "synthetic.surprising_neutral": {
+      "values": {
+        "joy": 0.3810546875,
+        "sadness": 0.183697916667,
+        "anger": 0.055,
+        "fear": 0.124903125,
+        "disgust": 0.06,
+        "surprise": 0.39
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0375,
+        "sadness": 0.0875,
+        "anger": 0.0,
+        "fear": 0.0375,
+        "disgust": 0.0,
+        "surprise": 0.3
+      },
+      "gated_appraisal": {
+        "joy": 0.03515625,
+        "sadness": 0.06125,
+        "anger": 0.0,
+        "fear": 0.020625,
+        "disgust": 0.0,
+        "surprise": 0.3
+      }
+    },
+    "synthetic.expected_good": {
+      "values": {
+        "joy": 0.6911875,
+        "sadness": 0.16525,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.412,
+        "sadness": 0.06,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      },
+      "gated_appraisal": {
+        "joy": 0.38625,
+        "sadness": 0.042,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.0
+      }
+    },
+    "synthetic.unexpected_blow": {
+      "values": {
+        "joy": 0.35,
+        "sadness": 0.628125,
+        "anger": 0.4895381662,
+        "fear": 0.66397625,
+        "disgust": 0.38928,
+        "surprise": 0.873333333333
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0,
+        "sadness": 0.75,
+        "anger": 0.57,
+        "fear": 0.75,
+        "disgust": 0.56,
+        "surprise": 0.8
+      },
+      "gated_appraisal": {
+        "joy": 0.0,
+        "sadness": 0.525,
+        "anger": 0.3705,
+        "fear": 0.4125,
+        "disgust": 0.336,
+        "surprise": 0.8
+      }
+    },
+    "synthetic.low_coping_external": {
+      "values": {
+        "joy": 0.3611796875,
+        "sadness": 0.44800625,
+        "anger": 0.328790198661,
+        "fear": 0.339232269502,
+        "disgust": 0.213468,
+        "surprise": 0.428666666667
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0135,
+        "sadness": 0.4815,
+        "anger": 0.37485,
+        "fear": 0.30015,
+        "disgust": 0.261,
+        "surprise": 0.34
+      },
+      "gated_appraisal": {
+        "joy": 0.01265625,
+        "sadness": 0.33705,
+        "anger": 0.2436525,
+        "fear": 0.1650825,
+        "disgust": 0.1566,
+        "surprise": 0.34
+      }
+    },
+    "synthetic.low_coping_internal": {
+      "values": {
+        "joy": 0.3611796875,
+        "sadness": 0.44800625,
+        "anger": 0.152351172324,
+        "fear": 0.339232269502,
+        "disgust": 0.13938,
+        "surprise": 0.428666666667
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "sadness",
+        "fear",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0135,
+        "sadness": 0.4815,
+        "anger": 0.12285,
+        "fear": 0.30015,
+        "disgust": 0.135,
+        "surprise": 0.34
+      },
+      "gated_appraisal": {
+        "joy": 0.01265625,
+        "sadness": 0.33705,
+        "anger": 0.0798525,
+        "fear": 0.1650825,
+        "disgust": 0.081,
+        "surprise": 0.34
+      }
+    },
+    "synthetic.high_coping_external": {
+      "values": {
+        "joy": 0.492512045052,
+        "sadness": 0.37555625,
+        "anger": 0.312916141944,
+        "fear": 0.259322443352,
+        "disgust": 0.213468,
+        "surprise": 0.428666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "sadness",
+        "anger",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.1215,
+        "sadness": 0.3735,
+        "anger": 0.34965,
+        "fear": 0.14535,
+        "disgust": 0.261,
+        "surprise": 0.34
+      },
+      "gated_appraisal": {
+        "joy": 0.11390625,
+        "sadness": 0.26145,
+        "anger": 0.2272725,
+        "fear": 0.0799425,
+        "disgust": 0.1566,
+        "surprise": 0.34
+      }
+    },
+    "synthetic.pure_negative_zero_cues": {
+      "values": {
+        "joy": 0.35,
+        "sadness": 0.5275,
+        "anger": 0.259186666667,
+        "fear": 0.396847912014,
+        "disgust": 0.10704,
+        "surprise": 0.467333333333
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "surprise"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0,
+        "sadness": 0.6,
+        "anger": 0.32,
+        "fear": 0.395,
+        "disgust": 0.08,
+        "surprise": 0.38
+      },
+      "gated_appraisal": {
+        "joy": 0.0,
+        "sadness": 0.42,
+        "anger": 0.208,
+        "fear": 0.21725,
+        "disgust": 0.048,
+        "surprise": 0.38
+      }
+    },
+    "synthetic.social_praise": {
+      "values": {
+        "joy": 0.449400589063,
+        "sadness": 0.1753125,
+        "anger": 0.055,
+        "fear": 0.116941875,
+        "disgust": 0.06,
+        "surprise": 0.274
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.093,
+        "sadness": 0.075,
+        "anger": 0.0,
+        "fear": 0.0225,
+        "disgust": 0.0,
+        "surprise": 0.18
+      },
+      "gated_appraisal": {
+        "joy": 0.0871875,
+        "sadness": 0.0525,
+        "anger": 0.0,
+        "fear": 0.012375,
+        "disgust": 0.0,
+        "surprise": 0.18
+      }
+    },
+    "synthetic.social_humiliation": {
+      "values": {
+        "joy": 0.3996875,
+        "sadness": 0.192083333333,
+        "anger": 0.055,
+        "fear": 0.1209225,
+        "disgust": 0.27168,
+        "surprise": 0.332
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "disgust"
+      ],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.06,
+        "sadness": 0.1,
+        "anger": 0.0,
+        "fear": 0.03,
+        "disgust": 0.36,
+        "surprise": 0.24
+      },
+      "gated_appraisal": {
+        "joy": 0.05625,
+        "sadness": 0.07,
+        "anger": 0.0,
+        "fear": 0.0165,
+        "disgust": 0.216,
+        "surprise": 0.24
+      }
+    },
+    "synthetic.tiny_miss": {
+      "values": {
+        "joy": 0.3562109375,
+        "sadness": 0.136739583333,
+        "anger": 0.0573928125,
+        "fear": 0.1085825625,
+        "disgust": 0.06,
+        "surprise": 0.138666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [],
+      "raw_appraisal": {
+        "joy": 0.0075,
+        "sadness": 0.0175,
+        "anger": 0.00375,
+        "fear": 0.00675,
+        "disgust": 0.001,
+        "surprise": 0.04
+      },
+      "gated_appraisal": {
+        "joy": 0.00703125,
+        "sadness": 0.01225,
+        "anger": 0.0024375,
+        "fear": 0.0037125,
+        "disgust": 0.0006,
+        "surprise": 0.04
+      }
+    },
+    "synthetic.complete_success": {
+      "values": {
+        "joy": 1.0752884375,
+        "sadness": 0.192083333333,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.486666666667
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ],
+      "raw_appraisal": {
+        "joy": 0.83,
+        "sadness": 0.1,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.4
+      },
+      "gated_appraisal": {
+        "joy": 0.778125,
+        "sadness": 0.07,
+        "anger": 0.0,
+        "fear": 0.0,
+        "disgust": 0.0,
+        "surprise": 0.4
+      }
+    }
+  },
+  "sequence": [
+    {
+      "key": "furina.alone",
+      "values": {
+        "joy": 0.7636484375,
+        "sadness": 0.1551875,
+        "anger": 0.055,
+        "fear": 0.105,
+        "disgust": 0.06,
+        "surprise": 0.1
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": []
+    },
+    {
+      "key": "furina.understood",
+      "values": {
+        "joy": 1.165297276176,
+        "sadness": 0.317097903539,
+        "anger": 0.055,
+        "fear": 0.3186771129,
+        "disgust": 0.06,
+        "surprise": 0.7612
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "fear",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.no_more_performance",
+      "values": {
+        "joy": 1.436141393389,
+        "sadness": 0.440359693434,
+        "anger": 0.055,
+        "fear": 0.474036493511,
+        "disgust": 0.06,
+        "surprise": 0.91120670504
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.helped_troupe",
+      "values": {
+        "joy": 1.310132511093,
+        "sadness": 0.422165030677,
+        "anger": 0.055,
+        "fear": 0.373730422424,
+        "disgust": 0.06,
+        "surprise": 0.391325250087
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.forced_performance",
+      "values": {
+        "joy": 1.092347205633,
+        "sadness": 0.492896984112,
+        "anger": 0.129081475,
+        "fear": 0.305610323001,
+        "disgust": 0.0822264,
+        "surprise": 0.206157783681
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.trial",
+      "values": {
+        "joy": 0.94345722322,
+        "sadness": 0.744936239787,
+        "anger": 0.454395396999,
+        "fear": 0.562258764815,
+        "disgust": 0.39357603543,
+        "surprise": 0.649825170578
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.secret_risk",
+      "values": {
+        "joy": 0.846254004723,
+        "sadness": 0.829508407158,
+        "anger": 0.489138927512,
+        "fear": 0.52483388209,
+        "disgust": 0.412196725803,
+        "surprise": 0.47807341309
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.stared_at",
+      "values": {
+        "joy": 0.765464340379,
+        "sadness": 0.668918686669,
+        "anger": 0.365217701924,
+        "fear": 0.348154447504,
+        "disgust": 0.257755637196,
+        "surprise": 0.212746704287
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "disgust",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.lonely_memory",
+      "values": {
+        "joy": 0.742926074501,
+        "sadness": 0.72851288306,
+        "anger": 0.318298320332,
+        "fear": 0.433852853479,
+        "disgust": 0.187844533437,
+        "surprise": 0.483700481162
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.performance_mode",
+      "values": {
+        "joy": 0.885530588367,
+        "sadness": 0.579475444653,
+        "anger": 0.245543639707,
+        "fear": 0.31414776227,
+        "disgust": 0.150408300062,
+        "surprise": 0.212946733177
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "furina.alone_after_show",
+      "values": {
+        "joy": 1.009520072152,
+        "sadness": 0.504388892229,
+        "anger": 0.203230498871,
+        "fear": 0.252529280175,
+        "disgust": 0.127081653245,
+        "surprise": 0.162149599783
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.alone_reading",
+      "values": {
+        "joy": 1.206067540992,
+        "sadness": 0.443072798259,
+        "anger": 0.174892883624,
+        "fear": 0.205567077836,
+        "disgust": 0.111286487107,
+        "surprise": 0.138456923176
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.praised_by_trusted",
+      "values": {
+        "joy": 1.194982455046,
+        "sadness": 0.462643417495,
+        "anger": 0.144797906575,
+        "fear": 0.294078284036,
+        "disgust": 0.10001357623,
+        "surprise": 0.487368286653
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.helped_people",
+      "values": {
+        "joy": 1.384433442713,
+        "sadness": 0.446096985885,
+        "anger": 0.124416948704,
+        "fear": 0.304605964621,
+        "disgust": 0.091673496895,
+        "surprise": 0.413723548747
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.public_speech",
+      "values": {
+        "joy": 1.107574925733,
+        "sadness": 0.525611584121,
+        "anger": 0.141947056291,
+        "fear": 0.280228335683,
+        "disgust": 0.088489426027,
+        "surprise": 0.208553950964
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.soldier_lost",
+      "values": {
+        "joy": 0.939483614164,
+        "sadness": 0.812194391725,
+        "anger": 0.417365796991,
+        "fear": 0.521508825562,
+        "disgust": 0.291752670594,
+        "surprise": 0.529497353911
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.leadership_criticized",
+      "values": {
+        "joy": 0.840466835684,
+        "sadness": 0.862904673033,
+        "anger": 0.564468095263,
+        "fear": 0.514899133362,
+        "disgust": 0.450083243959,
+        "surprise": 0.466354831829
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "disgust"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.unfamiliar_social",
+      "values": {
+        "joy": 0.774101315422,
+        "sadness": 0.731801218188,
+        "anger": 0.381913773404,
+        "fear": 0.436774345664,
+        "disgust": 0.263596252807,
+        "surprise": 0.435270500992
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "anger",
+        "disgust"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.battle_plan",
+      "values": {
+        "joy": 1.031273784827,
+        "sadness": 0.597886678345,
+        "anger": 0.281923259499,
+        "fear": 0.330764555473,
+        "disgust": 0.190637284394,
+        "surprise": 0.275466799268
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "kokomi.alone_with_traveler",
+      "values": {
+        "joy": 1.011791813129,
+        "sadness": 0.530179817921,
+        "anger": 0.228317990983,
+        "fear": 0.323863774857,
+        "disgust": 0.152052678425,
+        "surprise": 0.390103652499
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.alone",
+      "values": {
+        "joy": 1.063206192791,
+        "sadness": 0.452668262363,
+        "anger": 0.193759458102,
+        "fear": 0.267289050635,
+        "disgust": 0.128157743462,
+        "surprise": 0.206011432601
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.with_traveler",
+      "values": {
+        "joy": 1.120194615262,
+        "sadness": 0.471940661171,
+        "anger": 0.169218665728,
+        "fear": 0.341661325657,
+        "disgust": 0.11203727171,
+        "surprise": 0.543720363343
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.traveler_trusts",
+      "values": {
+        "joy": 1.270141822426,
+        "sadness": 0.515346542374,
+        "anger": 0.14105932474,
+        "fear": 0.429166992031,
+        "disgust": 0.100560229111,
+        "surprise": 0.718949983139
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.inherit_power",
+      "values": {
+        "joy": 1.331635402222,
+        "sadness": 0.523887083804,
+        "anger": 0.121788614073,
+        "fear": 0.466274903477,
+        "disgust": 0.092083689635,
+        "surprise": 0.809346059683
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.followers_demand",
+      "values": {
+        "joy": 1.042974128389,
+        "sadness": 0.562693992279,
+        "anger": 0.228697328107,
+        "fear": 0.360555775655,
+        "disgust": 0.15909773504,
+        "surprise": 0.245089048764
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.betrayed",
+      "values": {
+        "joy": 0.92684378724,
+        "sadness": 0.731338709907,
+        "anger": 0.476397149682,
+        "fear": 0.441422333136,
+        "disgust": 0.361867051692,
+        "surprise": 0.437870535347
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "anger",
+        "disgust"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.imprisoned",
+      "values": {
+        "joy": 0.891425146047,
+        "sadness": 0.799682295306,
+        "anger": 0.506723598501,
+        "fear": 0.51531346472,
+        "disgust": 0.283908045064,
+        "surprise": 0.612243917767
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.facing_dissolution",
+      "values": {
+        "joy": 0.861034882549,
+        "sadness": 0.941279154622,
+        "anger": 0.540293193608,
+        "fear": 0.650613973759,
+        "disgust": 0.250373397081,
+        "surprise": 0.719448777682
+      },
+      "dominant": "sadness",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.hurt_trusted",
+      "values": {
+        "joy": 0.805555093649,
+        "sadness": 0.896906108557,
+        "anger": 0.438058861168,
+        "fear": 0.544921192422,
+        "disgust": 0.297775131026,
+        "surprise": 0.513128045646
+      },
+      "dominant": "sadness",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.public_gaze",
+      "values": {
+        "joy": 0.739686372967,
+        "sadness": 0.675830168753,
+        "anger": 0.312583505027,
+        "fear": 0.375486011612,
+        "disgust": 0.207695712783,
+        "surprise": 0.306494939344
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "sadness"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "columbina.singing",
+      "values": {
+        "joy": 0.765162740939,
+        "sadness": 0.554971622101,
+        "anger": 0.245522570788,
+        "fear": 0.305232678015,
+        "disgust": 0.161818743368,
+        "surprise": 0.258941760397
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "engine.praised_by_friend",
+      "values": {
+        "joy": 1.026288345157,
+        "sadness": 0.528178421285,
+        "anger": 0.204945705682,
+        "fear": 0.357870860054,
+        "disgust": 0.134449586046,
+        "surprise": 0.560465029306
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "engine.stood_up",
+      "values": {
+        "joy": 0.913528126346,
+        "sadness": 0.696878679457,
+        "anger": 0.38652558028,
+        "fear": 0.555083851868,
+        "disgust": 0.174517476048,
+        "surprise": 0.674213116846
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "anger"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "engine.hurt_friend",
+      "values": {
+        "joy": 0.861515051164,
+        "sadness": 0.744573761549,
+        "anger": 0.388160854699,
+        "fear": 0.541781608937,
+        "disgust": 0.273145679792,
+        "surprise": 0.599602223224
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.routine_notice",
+      "values": {
+        "joy": 0.752091068614,
+        "sadness": 0.57002304602,
+        "anger": 0.28536901388,
+        "fear": 0.346698959933,
+        "disgust": 0.19509847481,
+        "surprise": 0.212513859653
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.surprising_neutral",
+      "values": {
+        "joy": 0.724184587586,
+        "sadness": 0.512854376906,
+        "anger": 0.230658781157,
+        "fear": 0.351020230963,
+        "disgust": 0.154652651266,
+        "surprise": 0.445776024253
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.expected_good",
+      "values": {
+        "joy": 0.952810435285,
+        "sadness": 0.459131850099,
+        "anger": 0.19550157041,
+        "fear": 0.2808934693,
+        "disgust": 0.129849317786,
+        "surprise": 0.211104300745
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.unexpected_blow",
+      "values": {
+        "joy": 0.880346104994,
+        "sadness": 0.84349567734,
+        "anger": 0.58713272193,
+        "fear": 0.766747112666,
+        "disgust": 0.436533225589,
+        "surprise": 0.918357503465
+      },
+      "dominant": "surprise",
+      "shock_channels": [
+        "sadness",
+        "anger",
+        "fear",
+        "disgust",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.low_coping_external",
+      "values": {
+        "joy": 0.798493916451,
+        "sadness": 0.890651903656,
+        "anger": 0.600986856044,
+        "fear": 0.590953288245,
+        "disgust": 0.396873103631,
+        "surprise": 0.506907855827
+      },
+      "dominant": "sadness",
+      "shock_channels": [
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.low_coping_internal",
+      "values": {
+        "joy": 0.747762036202,
+        "sadness": 0.91290066349,
+        "anger": 0.44369663176,
+        "fear": 0.57017882534,
+        "disgust": 0.316627302472,
+        "surprise": 0.529325231423
+      },
+      "dominant": "sadness",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.high_coping_external",
+      "values": {
+        "joy": 0.791235263856,
+        "sadness": 0.86418093469,
+        "anger": 0.543819708929,
+        "fear": 0.49282755749,
+        "disgust": 0.359266844158,
+        "surprise": 0.529509892643
+      },
+      "dominant": "sadness",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.pure_negative_zero_cues",
+      "values": {
+        "joy": 0.737702800737,
+        "sadness": 0.965901459917,
+        "anger": 0.535256751856,
+        "fear": 0.600010216204,
+        "disgust": 0.274156085881,
+        "surprise": 0.56666045447
+      },
+      "dominant": "sadness",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.social_praise",
+      "values": {
+        "joy": 0.74710139223,
+        "sadness": 0.727505818339,
+        "anger": 0.331853005346,
+        "fear": 0.408274029359,
+        "disgust": 0.195562967907,
+        "surprise": 0.380602007232
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "sadness",
+        "anger"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.social_humiliation",
+      "values": {
+        "joy": 0.735029968851,
+        "sadness": 0.615352184966,
+        "anger": 0.300020753494,
+        "fear": 0.368199880533,
+        "disgust": 0.359767126705,
+        "surprise": 0.428430046201
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "disgust"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.tiny_miss",
+      "values": {
+        "joy": 0.667573190674,
+        "sadness": 0.500357248009,
+        "anger": 0.257590872497,
+        "fear": 0.299861733097,
+        "disgust": 0.230008121665,
+        "surprise": 0.247048093461
+      },
+      "dominant": "joy",
+      "shock_channels": [],
+      "blends": [
+        "joy+sadness"
+      ]
+    },
+    {
+      "key": "synthetic.complete_success",
+      "values": {
+        "joy": 1.260285868019,
+        "sadness": 0.47489044753,
+        "anger": 0.220745423534,
+        "fear": 0.335267316306,
+        "disgust": 0.1738914629,
+        "surprise": 0.55147900828
+      },
+      "dominant": "joy",
+      "shock_channels": [
+        "joy",
+        "surprise"
+      ],
+      "blends": [
+        "joy+sadness"
+      ]
+    }
+  ]
+}

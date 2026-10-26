@@ -1,6 +1,6 @@
 """
-Emotion Engine v0.3 — 多通道情绪交互引擎（记忆耦合·双时钟）
-===========================================================
+Emotion Engine v0.7-dev — 多通道情绪交互引擎（L0 核心·L2 慢通道·记忆·耐受窗）
+==================================================================
 论文验证的设计决策:
   - Jennings (2025): 情绪 = 多个并行匹配流同时激活
   - Diamond (2007) / Bowen (2016): Arousal 驱动记忆固化，非 Valence
@@ -10,7 +10,37 @@ Emotion Engine v0.3 — 多通道情绪交互引擎（记忆耦合·双时钟）
   - Self-Excited Dynamics (2024): 消极情绪留存更久
 
 作者: 枫骅 & SCC
-日期: 2026/06/30
+日期: 2026/06/30（v0.7-dev 更新: 2026/10/26）
+
+v0.7-dev 核心变更:
+  - 耐受窗（tolerance.py）: load / capacity / regulated-hyper-hypo
+  - 负荷只取负性通道相对基线的偏离，trust/love 改为扩展容量
+  - 两 tick 滞回；hyper 放大负性输入并拖慢恢复，hypo 降低反应
+  - 快照完整持久化: 通道 + 耐受窗 + 事件计数 + Saga 计时 + shock 历史
+  - tick()/wake() 支持注入 now，便于确定性测试
+
+L0 核心提取（2026/10/25）:
+  - 纯动力学拆到 core.py：不依赖记忆 / 耐受 / 伤疤 / 氛围 / LLM
+  - tick(trace=True) 返回 StepTrace 分阶段快照，不改变计算
+  - 旧 import 路径保持；69 个 unittest（含 28 个 core 测试）
+  - 详细契约见 docs/CORE.md
+
+L1.1 交互激活修复（2026/10/26）:
+  - 交互矩阵默认由“高于人格基线的激活”驱动，不再把基线当情绪
+  - 快通道放大规则要求目标共激活；抑制规则不要求
+  - legacy_interactions=True 保留 v0.7 绝对阈值行为
+  - 空闲 300 tick 回到基线；纯负面事件不再凭空加 joy
+  - 详细记录见 docs/L1_FAST_CHANNELS.md
+
+L2 慢通道语义（2026/10/26）:
+  - slow → fast 基线：trust 用 trust_target(love)，love / 快通道 / guilt 用
+    人格基线；正常关系中的 trust 不会在空闲 tick 持续压 fear
+  - guilt 只在 self_agency > 0.3 时激活，低于门槛严格为 0
+  - love 的正面事件增量改为按本 tick 新增，不再用累计 positive_events
+  - trust ∈ [0, 1]、love ∈ [0, 2]；love→trust / guilt→trust 的累计增量
+    受 trust_target(love) 封顶
+  - legacy_slow_channels=True 保留旧 guilt / 累计正面事件 / trust 基线行为
+  - 详细记录见 docs/L2_SLOW_CHANNELS.md
 
 v0.3 核心变更:
   - 记忆-情绪耦合: Arousal 驱动存储 + 30min 固化窗口 + 三级记忆
@@ -31,457 +61,45 @@ import json
 import sqlite3
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+
+from tolerance import (
+    ZONE_HYPER,
+    ZONE_HYPO,
+    ToleranceState,
+)
+
+
+from core import (
+    ABSENCE_CHANNELS,
+    Appraisal,
+    Channel,
+    EmotionalState,
+    FAST_CHANNELS,
+    GUILT_SELF_AGENCY_THRESHOLD,
+    HALF_LIFE,
+    INTERACTION_RULES,
+    NEGATIVE_CHANNELS,
+    NEGATIVE_CHANNEL_NAMES,
+    OFFLINE_COMPRESSION,
+    OFFLINE_TRUST_DECAY_DAYS,
+    OFFLINE_TRUST_DECAY_RATE,
+    Personality,
+    SHOCK_WEIGHT,
+    SLOW_CHANNELS,
+    StepTrace,
+    apply_interactions,
+    appraise,
+    damage_trust,
+    decay,
+    gate_appraisal,
+    grow_slow_channels,
+    interaction_baselines,
+    return_to_baseline,
+    saturate,
+    trust_target,
+)
 
-
-# ══════════════════════════════════════════════════════
-# 通道定义
-# ══════════════════════════════════════════════════════
-
-class Channel(Enum):
-    """情绪通道"""
-    JOY      = "joy"       # 喜悦
-    SADNESS  = "sadness"   # 悲伤
-    ANGER    = "anger"     # 愤怒
-    FEAR     = "fear"      # 恐惧
-    LOVE     = "love"      # 爱/依恋      ← 慢通道
-    DISGUST  = "disgust"   # 厌恶
-    SURPRISE = "surprise"  # 惊讶
-    TRUST    = "trust"     # 信任          ← 慢通道
-    LONGING  = "longing"   # 思念          ← 缺失驱动通道
-    GUILT    = "guilt"     # 愧疚          ← 自责驱动通道
-
-
-FAST_CHANNELS = [Channel.JOY, Channel.SADNESS, Channel.ANGER,
-                 Channel.FEAR, Channel.DISGUST, Channel.SURPRISE,
-                 Channel.GUILT]
-SLOW_CHANNELS = [Channel.LOVE, Channel.TRUST]
-ABSENCE_CHANNELS = [Channel.LONGING]  # 思念：离线时上升，在线时消退
-
-
-# ══════════════════════════════════════════════════════
-# 核心: EmotionalState
-# ══════════════════════════════════════════════════════
-
-@dataclass
-class EmotionalState:
-    """8 通道全部正值。基线 ≠ 0。"""
-
-    joy:       float = 0.3
-    sadness:   float = 0.1
-    anger:     float = 0.05
-    fear:      float = 0.05
-    love:      float = 0.2
-    disgust:   float = 0.0
-    surprise:  float = 0.0
-    trust:     float = 0.25
-    longing:   float = 0.0    # 思念——从零开始。不见才生。
-    guilt:     float = 0.0    # 愧疚——从零开始。不做错事就没有。
-
-    # 对比度用的上一个快照
-    _previous: Optional[Dict[str, float]] = None
-    # 上次更新的时间戳
-    _last_update: float = field(default_factory=time.time)
-
-    def to_dict(self) -> Dict[str, float]:
-        return {
-            "joy": self.joy, "sadness": self.sadness,
-            "anger": self.anger, "fear": self.fear,
-            "love": self.love, "disgust": self.disgust,
-            "surprise": self.surprise, "trust": self.trust,
-            "longing": self.longing,
-            "guilt": self.guilt,
-        }
-
-    def clone(self) -> "EmotionalState":
-        s = EmotionalState(**self.to_dict())
-        s._last_update = self._last_update
-        if self._previous:
-            s._previous = dict(self._previous)
-        return s
-
-    def snapshot_previous(self):
-        """在衰减前保存快照，供对比度计算"""
-        self._previous = self.to_dict()
-
-    def delta(self, ch: Channel) -> float:
-        """返回此通道自上一帧的变化量(对比度)"""
-        if self._previous is None:
-            return 0.0
-        return getattr(self, ch.value) - self._previous.get(ch.value, 0.0)
-
-    def felt(self, ch: Channel) -> float:
-        """
-        感知压缩：log₁₀ 映射，边际递减。
-        raw=0.5 → felt≈0.35, raw=1.0 → felt≈0.5
-        raw=2.0 → felt≈0.65, raw=5.0 → felt≈0.85
-        值越大增长越慢，没有天花板但在感知上趋于平缓。
-        """
-        raw = getattr(self, ch.value)
-        if raw <= 0:
-            return 0.0
-        return math.log10(1 + raw * 2)
-
-    def felt_all(self) -> Dict[str, float]:
-        """所有通道的感知值"""
-        return {ch.value: self.felt(ch) for ch in Channel}
-
-
-# ══════════════════════════════════════════════════════
-# 衰减 & 基线配置
-# ══════════════════════════════════════════════════════
-
-# 半衰期（分钟）。积极快，消极慢（基于 Self-Excited Dynamics 2024）
-HALF_LIFE: Dict[Channel, float] = {
-    Channel.JOY:       90,    # 来得快去得快
-    Channel.SADNESS:  180,    # 留存最久
-    Channel.ANGER:    120,
-    Channel.FEAR:      60,
-    Channel.LOVE:     None,   # 慢通道——不自动衰减
-    Channel.DISGUST:   90,
-    Channel.SURPRISE:  30,    # 消散最快
-    Channel.GUILT:   180,     # 愧疚留存很久——和悲伤同级
-    Channel.TRUST:    None,   # 慢通道——不自动衰减
-}
-
-# 冲击阈值: 当 shock = e^(Δ×2)-1 超过此值 → 触发 shock 标记
-# 不同通道有不同的"冲击感知阈值"：
-#   joy: 0.3     喜悦容易感受但冲击不大（正面情绪缓冲强）
-#   sadness: 0.5 悲伤门槛高但一旦触发就是深刻的
-#   anger: 0.4   中等阈值
-#   fear: 0.5    高门槛——恐惧冲击是严重事件
-#   disgust: 0.3 厌恶敏感但消退快
-#   surprise: 0.6 最高门槛——惊讶本身就是冲击本质
-# 慢通道 (love/trust) 无冲击——渐进累积
-SHOCK_WEIGHT: Dict[Channel, float] = {
-    Channel.JOY:       0.3,
-    Channel.SADNESS:   0.5,
-    Channel.ANGER:     0.4,
-    Channel.FEAR:      0.5,
-    Channel.DISGUST:   0.3,
-    Channel.SURPRISE:  0.6,
-    Channel.GUILT:    0.4,
-}
-
-
-# ══════════════════════════════════════════════════════
-# 情绪衰减
-# ══════════════════════════════════════════════════════
-
-def decay(value: float, half_life_minutes: Optional[float],
-          elapsed_minutes: float, baseline: float = 0.0) -> float:
-    """
-    弹性衰减：偏离基线越远，等效半衰期越短（回弹越快）。
-      effective_T½ = T½ / (1 + distance)
-      distance = |value - baseline| / baseline
-    偏离 0 → 正常衰减，偏离 2×基线 → 半衰期折半，回弹加倍
-
-    慢通道 half_life = None → 不衰减
-    """
-    if half_life_minutes is None or elapsed_minutes <= 0:
-        return value
-
-    # 归一化距离
-    if baseline > 0.01:
-        distance = abs(value - baseline) / baseline
-    else:
-        distance = abs(value - baseline)
-
-    # 偏离越大，半衰期越短 → 衰减越快
-    effective_hl = half_life_minutes / (1 + distance)
-
-    # 衰减向基线
-    return baseline + (value - baseline) * (2 ** (-elapsed_minutes / effective_hl))
-
-
-def return_to_baseline(current: float, baseline: float,
-                       elapsed_minutes: float) -> float:
-    """
-    基线回弹，允许振荡穿越。
-    轻度拉力 + 惯性——可能冲过头再弹回来。
-    """
-    if elapsed_minutes <= 0:
-        return current
-
-    # 拉力随时间和距离增加
-    distance = current - baseline
-    pull_strength = min(0.3, 0.01 * elapsed_minutes)  # 每 tick 最多拉 30%
-
-    return current - distance * pull_strength
-
-
-# ══════════════════════════════════════════════════════
-# 交互矩阵
-# ══════════════════════════════════════════════════════
-
-# v0.4: 移除 sadness/fear→anger——愤怒只来自负面事件+厌恶转化，不被悲伤/恐惧推高
-INTERACTION_RULES: Dict[Tuple[Channel, Channel], Tuple[str, float]] = {
-    # (通道A, 通道B) → (效应, 强度)
-    (Channel.ANGER,   Channel.TRUST):      ("suppress_trust",  0.08),  # 愤怒暂时压信任
-    (Channel.TRUST,   Channel.FEAR):       ("suppress_fear",   0.15),  # 信任降低恐惧
-    (Channel.LOVE,    Channel.FEAR):       ("blend",           0.0),   # 怕失去 (标记)
-    (Channel.JOY,     Channel.SADNESS):    ("blend",           0.0),   # 苦涩的微笑 (标记)
-    (Channel.SURPRISE, Channel.FEAR):      ("amplify_fear",    0.25),
-    (Channel.SURPRISE, Channel.JOY):       ("amplify_joy",     0.15),
-    (Channel.DISGUST, Channel.ANGER):      ("amplify_anger",   0.25),  # 道德愤怒——厌恶才转化愤怒
-    (Channel.LOVE,    Channel.TRUST):      ("amplify_trust",   0.02),  # 慢调制——非常微弱
-    (Channel.GUILT,   Channel.TRUST):      ("amplify_trust",   0.1),   # 愧疚→包容信任（需要被原谅）
-    (Channel.GUILT,   Channel.ANGER):      ("suppress_anger",  0.3),   # 愧疚压制愤怒（是我的错不是你）
-    (Channel.GUILT,   Channel.SADNESS):    ("amplify_sadness",  0.15), # 愧疚加深悲伤（后悔）
-    (Channel.GUILT,   Channel.LOVE):       ("amplify_love",    0.05),  # 愧疚→更用力去爱（弥补）
-}
-
-
-def apply_interactions(state: EmotionalState) -> List[str]:
-    """应用交互矩阵。返回触发的混合标签。
-    v0.4: 绝对值驱动但强度已校准——连续混合下 4-6 通道同时激活，总交互量需匹配。
-    """
-    snap = {ch.value: getattr(state, ch.value) for ch in Channel}
-    blends = []
-    deltas = {ch.value: 0.0 for ch in Channel}
-
-    for (a, b), (effect, strength) in INTERACTION_RULES.items():
-        va = snap[a.value]
-        vb = snap[b.value]
-        if va < 0.05 or vb < 0.05:
-            continue
-
-        if effect == "amplify_joy":
-            deltas["joy"] += va * strength * saturate(snap["joy"])
-        elif effect == "amplify_anger":
-            deltas["anger"] += va * strength * saturate(snap["anger"])
-        elif effect == "amplify_fear":
-            deltas["fear"] += va * strength * saturate(snap["fear"])
-        elif effect == "amplify_sadness":
-            deltas["sadness"] += va * strength * saturate(snap["sadness"])
-        elif effect == "amplify_love":
-            deltas["love"] += strength * saturate(snap["love"], asymptote=2.0)
-        elif effect == "amplify_trust":
-            deltas["trust"] += strength * saturate(snap["trust"])
-        elif effect.startswith("suppress"):
-            target = effect.split("_")[1]
-            deltas[target] -= snap[a.value] * strength
-        elif effect == "blend":
-            blends.append(f"{a.value}+{b.value}")
-
-    # 统一应用所有交互增量
-    for ch_name, delta in deltas.items():
-        if delta != 0:
-            current = getattr(state, ch_name)
-            setattr(state, ch_name, max(0.0, current + delta))
-
-    return blends
-
-
-def saturate(x: float, asymptote: float = 3.0) -> float:
-    """自然饱和因子: 1 - x/asymptote。
-    值越高增量越小。x=0→1.0, x=1.5→0.5, x=3.0→0。
-    不是 tanh——是线性压缩，算起来轻。
-    """
-    return max(0.0, 1.0 - x / asymptote)
-
-
-# ══════════════════════════════════════════════════════
-# 慢通道累积 & 破坏
-# ══════════════════════════════════════════════════════
-
-def trust_target(love: float) -> float:
-    """trust 的引力线：随 love 上升。不是固定基线，是曲线。
-    love=0.1 → trust_target=0.10
-    love=0.3 → trust_target=0.22
-    love=0.6 → trust_target=0.50
-    love=0.9 → trust_target=0.78
-    斜率递减——爱越高，每单位爱换来的信任增益越小。
-    """
-    return 1.0 - 1.0 / (1.0 + love * 3.5)
-
-
-def grow_slow_channels(state: EmotionalState, events_today: int,
-                       positive_count: int, elapsed_hours: float):
-    """慢通道互相照应——love 和 trust 是耦合对，不是单向依赖。
-    trust 向 trust_target(love) 引力线靠近。
-    love 受 trust 影响：trust 长期低于目标时 love 缓慢侵蚀。
-    """
-    # trust 向 trust_target(love) 靠近
-    target = trust_target(state.love)
-    gap = target - state.trust
-    if gap > 0:
-        state.trust += gap * 0.02 + elapsed_hours * 0.0003
-    else:
-        state.trust += gap * 0.005  # 溢出时慢慢降回
-
-    # love 也感受 trust——trust 长期低于 target 时 love 被侵蚀
-    trust_deficit = max(0.0, target - state.trust)
-    if trust_deficit > 0.15:
-        # 信任缺口大 → 爱被慢慢磨掉
-        state.love -= trust_deficit * 0.005 * elapsed_hours
-    else:
-        # 信任健康 → 爱自然生长
-        sat_love = saturate(state.love, asymptote=2.0)
-        love_growth = elapsed_hours * 0.0005 * sat_love + positive_count * 0.02 * sat_love
-        state.love += love_growth
-
-
-def damage_trust(state: EmotionalState, betrayal_severity: float):
-    """背叛事件打掉信任。值可以短暂降到基线以下。"""
-    state.trust = state.trust * (1.0 - betrayal_severity * 0.5)
-    # trust 被打掉 → 让 love 也受一点影响（二级效应）
-    if betrayal_severity > 0.5:
-        state.love = state.love * 0.85
-
-
-# ══════════════════════════════════════════════════════
-# 慢通道 → 快通道 门控（在 appraisal 阶段介入）
-# ══════════════════════════════════════════════════════
-
-def gate_appraisal(raw_activation: Dict[Channel, float],
-                   trust: float, love: float,
-                   boundary_violation: bool = False) -> Dict[Channel, float]:
-    """trust/love 在认知评估阶段压低负面/抬高正面。
-    boundary_violation: 低信任时被越界称呼（亲密词/侮辱词）"""
-    fear_gate    = max(0.02, 1.0 - trust * 0.9)
-    anger_gate   = max(0.05, 1.0 - trust * 0.7)
-    sadness_gate = max(0.05, 1.0 - love * 0.6)
-    disgust_gate = max(0.05, 1.0 - trust * 0.8)
-    joy_boost    = 1.0 + love * 0.5
-    joy_trust_gate = min(1.0, trust * 1.5)
-
-    gated = {}
-    for ch, val in raw_activation.items():
-        if ch == Channel.FEAR:
-            gated[ch] = val * fear_gate
-            if trust < 0.3 and raw_activation.get(Channel.JOY, 0) > 0.3:
-                gated[ch] += (0.3 - trust) * 0.5
-        elif ch == Channel.ANGER:
-            gated[ch] = val * anger_gate
-        elif ch == Channel.SADNESS:
-            gated[ch] = val * sadness_gate
-        elif ch == Channel.DISGUST:
-            gated[ch] = val * disgust_gate
-            if trust < 0.35 and raw_activation.get(Channel.JOY, 0) > 0.2:
-                gated[ch] += (0.35 - trust) * 0.8
-            # 低信任+越界称呼 → 厌恶飙升（"你谁啊叫我老公？"）
-            if boundary_violation and trust < 0.5:
-                gated[ch] += (0.5 - trust) * 1.2
-        elif ch == Channel.JOY:
-            # 低信任+越界 → joy 被压制（不是喜悦，是冒犯）
-            if boundary_violation and trust < 0.5:
-                gated[ch] = val * joy_boost * joy_trust_gate * 0.3
-            else:
-                gated[ch] = val * joy_boost * joy_trust_gate
-        else:
-            gated[ch] = val
-    return gated
-
-
-# ══════════════════════════════════════════════════════
-# 认知评估（简易版）
-# ══════════════════════════════════════════════════════
-
-@dataclass
-class Appraisal:
-    """一个事件的认知评估"""
-    goal_relevance:     float = 0.0   # 0~1
-    goal_conduciveness: float = 0.0   # -1 障碍 ~ +1 助力
-    expectedness:       float = 0.5   # 0 完全意外 ~ 1 完全预期
-    coping_potential:   float = 0.5   # 0~1 我能控制的程度
-    other_agency:       float = 0.0   # 0~1 他人/外部因素占比
-    social_evaluation:  float = 0.0   # -1 负面评价 ~ +1 正面评价
-
-
-def appraise(app: Appraisal) -> Dict[Channel, float]:
-    """认知评估 → 通道原始激活（门控前）
-    v0.4: 连续混合替代二元门控——每个通道都有非零激活。
-    评鉴维度调制强度，不闸断开/关。正面事件也有微量负面通道（bittersweet），
-    负面事件也有正面痕迹。惊讶几乎总伴随所有情绪。
-    论文依据: Vanderbilt 混合情绪——各组分互不消灭。
-    """
-    gc = app.goal_conduciveness       # -1 ~ +1
-    gr = app.goal_relevance           # 0 ~ 1
-    cp = app.coping_potential         # 0 ~ 1
-    ue = 1.0 - app.expectedness       # 意外程度 0~1
-    other = app.other_agency          # 0 ~ 1
-    self_agency = 1.0 - other         # 0 ~ 1
-    se = app.social_evaluation        # -1 ~ +1
-
-    return {
-        # 喜悦：正面事件 + 高应对 + 正面社交反馈
-        Channel.JOY:      gr * (max(0, gc) * 0.6 + cp * 0.15 + max(0, se) * 0.1),
-
-        # 悲伤：负面事件 + 低应对 + 意外（连好事也可能 bittersweet）
-        Channel.SADNESS:  gr * (max(0, -gc) * 0.5 + max(0, gc) * 0.05 + (1 - cp) * 0.15 + ue * 0.1),
-
-        # 愤怒：必须负面事件才激活。外部归因 + 挫败感只放大，不创造
-        Channel.ANGER:    gr * max(0, -gc) * (other * 0.4 + 0.15 + (1 - cp) * ue * 0.1),
-
-        # 恐惧：意外 × 低应对 + 不确定性
-        Channel.FEAR:     gr * (max(0, -gc) * (ue * 0.4 + (1 - cp) * 0.2) + ue * (1 - cp) * 0.15),
-
-        # 厌恶：负面社交评价 + 外部归因
-        Channel.DISGUST:  gr * (max(0, -se) * 0.5 + max(0, -gc) * other * 0.2),
-
-        # 惊讶：意外 × 相关性（始终激活——任何偏差都有惊讶成分）
-        Channel.SURPRISE: gr * ue * 0.6 + abs(gc) * ue * 0.2,
-
-        # 愧疚：我的责任 × 负面事件 × 我能控制（本可避免）
-        Channel.GUILT:    gr * max(0, -gc) * self_agency * (0.3 + cp * 0.2),
-    }
-
-
-# ══════════════════════════════════════════════════════
-# 人格基线
-# ══════════════════════════════════════════════════════
-
-@dataclass
-class Personality:
-    """OCEAN 大五人格 —— 决定基线偏移"""
-    openness:          float = 0.5   # 开放性
-    conscientiousness: float = 0.5   # 尽责性
-    extraversion:      float = 0.5   # 外向性
-    agreeableness:     float = 0.5   # 宜人性
-    neuroticism:       float = 0.5   # 神经质
-
-    def baseline(self) -> Dict[Channel, float]:
-        """从 OCEAN 推导各通道基线（非零）"""
-        return {
-            Channel.JOY:      0.2 + self.extraversion * 0.3,
-            Channel.SADNESS:  0.05 + self.neuroticism * 0.15,
-            Channel.ANGER:    0.03 + self.neuroticism * 0.1 - self.agreeableness * 0.05,
-            Channel.FEAR:     0.03 + self.neuroticism * 0.15,
-            Channel.LOVE:     0.15 + self.agreeableness * 0.2,
-            Channel.DISGUST:  0.02 + (1 - self.openness) * 0.08,
-            Channel.SURPRISE: 0.05 + self.openness * 0.1,
-            Channel.TRUST:    0.15 + self.agreeableness * 0.2 - self.neuroticism * 0.1,
-            Channel.LONGING: 0.0,  # 思念基线为零——不见才生
-            Channel.GUILT:   0.0,  # 愧疚基线为零——不做错就没有
-        }
-
-
-# ══════════════════════════════════════════════════════
-# 双时钟：在线 / 离线 情绪衰减速率
-# ══════════════════════════════════════════════════════
-# 离线期间（休眠/关机/长时间不对话），时间仍在流逝，
-# 但主观体验是压缩的——睡一觉愤怒几乎散尽，爱却不会。
-# 压缩系数 < 1.0 表示离线时间 "感受上更短"。
-
-OFFLINE_COMPRESSION: Dict[Channel, float] = {
-    # 快通道：离线时衰减加速（值越小 = 衰减越快 = 越不留）
-    Channel.ANGER:    0.08,   # 睡前吵架，醒后基本不气
-    Channel.SURPRISE: 0.05,   # 冲击感睡一觉几乎清空
-    Channel.DISGUST:  0.10,   # 恶心事第二天淡了
-    Channel.JOY:      0.20,   # 好事回味还在，但不如当时浓
-    Channel.FEAR:     0.25,   # 焦虑能穿透睡眠——醒来还怕
-    Channel.SADNESS:  0.30,   # 悲伤穿透力最强——醒来还在被子里
-    Channel.GUILT:    0.25,   # 愧疚也穿透睡眠——但没悲伤那么深
-    # 慢通道：离线影响极小
-    Channel.TRUST:    0.95,   # 信任不因睡觉消失
-    Channel.LOVE:     0.98,   # 几乎不打折
-}
-
-# 离线 trust 衰减阈值（天）+ 衰减率
-OFFLINE_TRUST_DECAY_DAYS: float = 7.0     # 7 天不联系才开始降
-OFFLINE_TRUST_DECAY_RATE: float = 0.95    # 每多 7 天 × 0.95
 
 @dataclass
 class EmotionEngine:
@@ -495,14 +113,53 @@ class EmotionEngine:
     _last_saga:         float = field(default_factory=time.time)
     atmosphere:         float = -0.3  # -1 放松 ~ +1 紧绷。初始偏轻松。
     _recent_shocks:     List[float] = field(default_factory=list)  # 最近 N 个事件的 shock 强度
+    tolerance:          ToleranceState = field(default_factory=ToleranceState)
+    # L1.1: 交互矩阵默认由“高于人格基线的激活”驱动，消除空闲交互地板。
+    # 设为 True 可复现 v0.7 的绝对阈值行为，用于旧曲线对照。
+    legacy_interactions: bool = False
+    # L2: 设为 True 可复现旧的慢通道行为：
+    #   - guilt 只要 self_agency > 0 就激活（无 0.3 门槛）
+    #   - love 增长使用累计 positive_events 而不是本次新增
+    #   - trust 的正向交互不设 trust_target 上限
+    # 用于信任/爱意长程曲线的前后对照。
+    legacy_slow_channels: bool = False
 
-    def wake(self) -> Dict:
+    def _scar_pressure(self) -> float:
+        """旧伤疤对耐受窗的压缩程度。取最强的一条，不累加。"""
+        strongest = max(
+            (pattern.threshold_shift for pattern in self.scars.patterns.values()),
+            default=0.0,
+        )
+        return max(0.0, min(1.0, strongest))
+
+    def _update_tolerance(self, *,
+                          shock_channels: Tuple[str, ...] = (),
+                          boundary_violation: bool = False,
+                          elapsed_hours: float = 0.0) -> str:
+        """用当前通道状态刷新耐受窗。必须在通道更新之后调用。"""
+        baseline = {ch.value: value for ch, value in self.personality.baseline().items()}
+        return self.tolerance.update(
+            state=self.state.to_dict(),
+            baseline=baseline,
+            trust=self.state.trust,
+            love=self.state.love,
+            trust_target_value=trust_target(self.state.love),
+            neuroticism=self.personality.neuroticism,
+            atmosphere=self.atmosphere,
+            shock_channels=shock_channels,
+            boundary_violation=boundary_violation,
+            scar_pressure=self._scar_pressure(),
+            elapsed_hours=elapsed_hours,
+        )
+
+    def wake(self, now: Optional[float] = None) -> Dict:
         """
         从休眠中醒来。结算离线期间的情绪变化。
         离线时间对每个通道的"感受"不同——愤怒消散快，爱几乎不变。
         调用时机: Agent 启动/恢复对话时，tick() 之前调用一次。
+        now 可注入，便于离线结算的确定性测试。
         """
-        now = time.time()
+        now = time.time() if now is None else now
         offline_minutes = (now - self.state._last_update) / 60.0
         if offline_minutes < 1:
             return {"offline_minutes": 0, "message": "barely slept"}
@@ -541,21 +198,30 @@ class EmotionEngine:
 
         self.state._last_update = now
 
+        self._update_tolerance(elapsed_hours=offline_hours)
+
         return {
             "offline_minutes":     round(offline_minutes, 1),
             "compressed_fast":     {ch.value: round(offline_minutes * OFFLINE_COMPRESSION.get(ch, 0.3), 1)
                                    for ch in FAST_CHANNELS},
             "state":              self.state.to_dict(),
+            "tolerance":          self.tolerance.to_dict(),
         }
 
     def tick(self, appraisal: Optional[Appraisal] = None,
-             boundary_violation: bool = False) -> Dict:
+             boundary_violation: bool = False,
+             now: Optional[float] = None,
+             trace: bool = False) -> Dict:
         """
         每次对话轮次/事件 的完整情绪更新。
         boundary_violation: 低信任时的越界称呼（亲密词等）
+        now: 可注入的时钟，便于确定性测试；默认使用当前时间。
+        trace: 为 True 时额外返回 StepTrace（分阶段快照，不改变计算）。
         """
-        now = time.time()
-        elapsed_minutes = (now - self.state._last_update) / 60.0
+        now = time.time() if now is None else now
+        # 注入时钟可能早于上次更新（测试/时钟回拨）；不允许负时间。
+        raw_elapsed_minutes = (now - self.state._last_update) / 60.0
+        elapsed_minutes = max(0.0, raw_elapsed_minutes)
         elapsed_hours   = elapsed_minutes / 60.0
 
         # NaN/Inf 防护——极端值后重设
@@ -564,6 +230,13 @@ class EmotionEngine:
             if math.isnan(val) or math.isinf(val):
                 bl = self.personality.baseline()
                 setattr(self.state, ch.value, bl[ch])
+
+        trace_data: Optional[StepTrace] = None
+        if trace:
+            trace_data = StepTrace(elapsed_minutes=elapsed_minutes)
+            trace_data.mark("before", self.state)
+            if raw_elapsed_minutes < 0:
+                trace_data.notes.append("clock_went_backwards: elapsed clamped to 0")
 
         # Step 0: 保存上一帧快照（对比度用）
         self.state.snapshot_previous()
@@ -581,24 +254,57 @@ class EmotionEngine:
         for ch in FAST_CHANNELS:
             val = getattr(self.state, ch.value)
             hl  = HALF_LIFE[ch]
+            if hl is not None:
+                # hyper 时负性情绪更难平复；hypo 时恢复也慢；正性不受影响。
+                hl *= self.tolerance.decay_scale_for(ch.value)
             # 弹性衰减：偏离越远越快
             val = decay(val, hl, elapsed_minutes, baseline[ch])
             # 基线回弹（轻拉力）
             val = return_to_baseline(val, baseline[ch], elapsed_minutes)
             setattr(self.state, ch.value, val)
 
+        if trace_data:
+            trace_data.mark("after_decay", self.state)
+
         # Step 2: 慢通道缓慢生长
+        # L2: love 的正面事件增量只取“本 tick 新增”，不再用累计
+        # positive_events。旧行为可用 legacy_slow_channels=True 复现。
+        positive_now = 1 if (
+            appraisal is not None
+            and appraisal.goal_conduciveness > 0
+            and appraisal.other_agency > 0
+        ) else 0
+        positive_input = (
+            self.positive_events if self.legacy_slow_channels else positive_now
+        )
         grow_slow_channels(self.state, self.events_today,
-                           self.positive_events, elapsed_hours)
+                           positive_input, elapsed_hours)
+
+        if trace_data:
+            trace_data.mark("after_slow_channels", self.state)
+            trace_data.slow_positive_input = positive_input
 
         # Step 3: 如果有新事件 → 认知评估 → 叠加
         raw = {}
         gated = {}
         shock_channels = []
         if appraisal is not None:
-            raw = appraise(appraisal)
+            raw = appraise(
+                appraisal,
+                guilt_self_agency_threshold=(
+                    0.0 if self.legacy_slow_channels
+                    else GUILT_SELF_AGENCY_THRESHOLD
+                ),
+            )
             gated = gate_appraisal(raw, self.state.trust, self.state.love,
                                     boundary_violation=boundary_violation)
+
+            # 耐受窗调制：hyper 放大负性输入，hypo 降低反应强度。
+            negative_gain = self.tolerance.negative_gain
+            if negative_gain != 1.0:
+                for ch in NEGATIVE_CHANNELS:
+                    if ch in gated and gated[ch] > 0.001:
+                        gated[ch] *= negative_gain
 
             # Step 3.5: 触发敏感化——旧伤疤放大负面情绪
             scar_shift = self.scars.get_shift(appraisal)
@@ -630,6 +336,9 @@ class EmotionEngine:
             self.events_today += 1
             if appraisal.goal_conduciveness > 0 and appraisal.other_agency > 0:
                 self.positive_events += 1
+
+        if trace_data:
+            trace_data.mark("after_appraisal", self.state)
 
         # Step 4: 氛围更新 + 调制
         # 氛围基于最近 shock 密度和当前 arousal 漂移
@@ -670,8 +379,37 @@ class EmotionEngine:
         if boundary_violation and self.state.trust < 0.5:
             self.state.trust = max(0.01, self.state.trust - (0.5 - self.state.trust) * 0.3)
 
-        # Step 5: 交互矩阵
-        blends = apply_interactions(self.state)
+        if trace_data:
+            trace_data.raw_appraisal = {k.value: v for k, v in raw.items()}
+            trace_data.gated_appraisal = {k.value: v for k, v in gated.items()}
+            trace_data.mark("after_atmosphere", self.state)
+            # L0 行为保持：氛围对 gated 的调制发生在写入 state 之后，
+            # 因此当前只影响输出/快照，不改变本 tick 的通道值。
+            if appraisal is not None and abs(self.atmosphere) > 1e-9:
+                trace_data.notes.append(
+                    "atmosphere gate mutates gated after state write "
+                    "(preserved L0 behavior)"
+                )
+
+        # Step 5: 交互矩阵（负性交互强度受耐受窗调制）
+        # L1.1: 默认只让“高于人格基线”的激活参与交互，避免基线本身
+        # 在无事件时被当成情绪活动。legacy_interactions=True 保留旧行为。
+        interaction_baseline = interaction_baselines(
+            self.personality, self.state.love,
+        ) if not self.legacy_slow_channels else baseline
+        blends = apply_interactions(
+            self.state,
+            negative_scale=self.tolerance.interaction_scale,
+            baseline=None if self.legacy_interactions else interaction_baseline,
+            trust_ceiling=(
+                None if self.legacy_slow_channels
+                else trust_target(self.state.love)
+            ),
+        )
+
+        if trace_data:
+            trace_data.mark("after_interaction", self.state)
+            trace_data.trust_target = trust_target(self.state.love)
 
         # Step 5: 对比度冲击感（指数级 Δ 感知，带安全截断）
         for ch in FAST_CHANNELS:
@@ -682,6 +420,16 @@ class EmotionEngine:
             threshold = SHOCK_WEIGHT.get(ch, 0.3)
             if shock > threshold:
                 shock_channels.append(ch.value)
+
+        if trace_data:
+            trace_data.shock_channels = list(shock_channels)
+            trace_data.blends = list(blends)
+            # 氛围在 Step 4 采样 shock_channels 时，列表还没被 Step 5 填充，
+            # 所以 shock 密度总是看到 0。记录该顺序，便于 L1 修正时对照。
+            trace_data.notes.append(
+                "shock density sampled before shock detection "
+                "(preserved L0 behavior)"
+            )
 
         # Step 6: 记忆存储 + 固化（带 novelty gate）
         if appraisal is not None:
@@ -725,13 +473,26 @@ class EmotionEngine:
                         setattr(self.state, ch_name, current + clamped)
             self._last_saga = now
 
+        # Step 8: 刷新耐受窗。放在通道与氛围更新之后，
+        # 让本 tick 的过载在下一 tick 才影响增益（带两 tick 滞回）。
+        self._update_tolerance(
+            shock_channels=tuple(shock_channels),
+            boundary_violation=boundary_violation,
+            elapsed_hours=elapsed_hours,
+        )
+
         # 更新计时器
         self.state._last_update = now
+
+        if trace_data:
+            trace_data.mark("final", self.state)
+            trace_data.atmosphere = self.atmosphere
+            trace_data.tolerance_zone = self.tolerance.zone
 
         # 输出
         felt = self.state.felt_all()
         mem_stats = self.memory.stats()
-        return {
+        result = {
             "state":          self.state.to_dict(),
             "felt":           felt,  # log压缩后的感知值
             "blends":         blends,
@@ -742,7 +503,11 @@ class EmotionEngine:
             "love":           round(self.state.love, 3),
             "memory":         mem_stats,
             "atmosphere":     round(self.atmosphere, 3),
+            "tolerance":      self.tolerance.to_dict(),
         }
+        if trace_data is not None:
+            result["trace"] = trace_data.to_dict()
+        return result
 
 
 # ══════════════════════════════════════════════════════
@@ -879,44 +644,108 @@ def init_db(path: str = DB_PATH):
     return db
 
 
-def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH):
-    """保存完整引擎状态——断线恢复用。"""
+def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH,
+                  now: Optional[float] = None) -> bool:
+    """保存完整引擎状态——断线恢复用。
+
+    旧版只存通道值与 atmosphere，恢复后耐受窗、事件计数、Saga 计时
+    和最近 shock 全部丢失。这里统一存成一个 JSON payload，同时保留
+    atmosphere 列以兼容旧读取逻辑。
+    """
+    saved_at = time.time() if now is None else now
+    # 快照可能发生在引擎首次 tick 之前；确保表结构存在。
+    init_db(path).close()
     db = _get_db(path)
-    state_json = json.dumps(engine.state.to_dict())
-    db.execute(
-        "INSERT INTO snapshots (state_json, atmosphere, saved_at) VALUES (?,?,?)",
-        (state_json, engine.atmosphere, time.time()))
-    # 同时保存 scars
-    for tag, p in engine.scars.patterns.items():
+    try:
+        payload = {
+            "state": engine.state.to_dict(),
+            "tolerance": engine.tolerance.to_dict(),
+            "atmosphere": engine.atmosphere,
+            "events_today": engine.events_today,
+            "positive_events": engine.positive_events,
+            "last_saga": engine._last_saga,
+            "recent_shocks": list(engine._recent_shocks),
+            "legacy_interactions": engine.legacy_interactions,
+            "legacy_slow_channels": engine.legacy_slow_channels,
+        }
         db.execute(
-            "INSERT OR REPLACE INTO scars VALUES (?,?,?,?,?)",
-            (tag, p.trigger_count, p.threshold_shift, p.positive_counter, p.last_triggered))
-    db.commit()
+            "INSERT INTO snapshots (state_json, atmosphere, saved_at) VALUES (?,?,?)",
+            (json.dumps(payload, ensure_ascii=False), engine.atmosphere, saved_at))
+        for tag, pattern in engine.scars.patterns.items():
+            db.execute(
+                "INSERT OR REPLACE INTO scars VALUES (?,?,?,?,?)",
+                (tag, pattern.trigger_count, pattern.threshold_shift,
+                 pattern.positive_counter, pattern.last_triggered))
+        db.commit()
+        return True
+    finally:
+        db.close()
 
 
 def load_snapshot(engine: "EmotionEngine", path: str = DB_PATH) -> bool:
-    """从上次快照恢复。返回 True 如果成功。"""
+    """从上次快照恢复。返回 True 如果成功。
+
+    兼容 v0.5-v0.6 的旧快照：那种 state_json 直接是通道字典，
+    没有外层 payload，也没有 tolerance / 计数器。
+    """
     if not os.path.exists(path):
         return False
+    # 旧库可能只有 memories/scars、没有 snapshots 表。
+    init_db(path).close()
     db = _get_db(path)
-    row = db.execute(
-        "SELECT state_json, atmosphere FROM snapshots ORDER BY saved_at DESC LIMIT 1"
-    ).fetchone()
-    if not row:
-        return False
-    data = json.loads(row[0])
-    for ch in Channel:
-        if ch.value in data:
-            setattr(engine.state, ch.value, data[ch.value])
-    engine.atmosphere = row[1]
-    # 恢复 scars
-    for row_s in db.execute("SELECT * FROM scars"):
-        tag, cnt, shift, pos, last = row_s
-        p = SensitizationPattern(tag=tag, trigger_count=cnt,
-                                  threshold_shift=shift, positive_counter=pos,
-                                  last_triggered=last)
-        engine.scars.patterns[tag] = p
-    return True
+    try:
+        row = db.execute(
+            "SELECT state_json, atmosphere, saved_at FROM snapshots "
+            "ORDER BY saved_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return False
+
+        data = json.loads(row[0])
+        if not isinstance(data, dict):
+            return False
+        state_data = data.get("state", data)
+        if not isinstance(state_data, dict):
+            return False
+
+        for ch in Channel:
+            if ch.value in state_data:
+                setattr(engine.state, ch.value, float(state_data[ch.value]))
+
+        snapshot_atmosphere = data.get("atmosphere", row[1])
+        if snapshot_atmosphere is not None:
+            engine.atmosphere = float(snapshot_atmosphere)
+
+        if "tolerance" in data:
+            engine.tolerance = ToleranceState.from_dict(data.get("tolerance"))
+        if "events_today" in data:
+            engine.events_today = int(data.get("events_today", 0))
+        if "positive_events" in data:
+            engine.positive_events = int(data.get("positive_events", 0))
+        if "last_saga" in data:
+            engine._last_saga = float(data.get("last_saga", engine._last_saga))
+        if isinstance(data.get("recent_shocks"), list):
+            engine._recent_shocks = [
+                float(value) for value in data["recent_shocks"][-5:]
+            ]
+        if "legacy_interactions" in data:
+            engine.legacy_interactions = bool(data.get("legacy_interactions"))
+        if "legacy_slow_channels" in data:
+            engine.legacy_slow_channels = bool(data.get("legacy_slow_channels"))
+
+        # 以快照时间作为计时起点，避免恢复后把停机时间误算成在线时间。
+        if row[2] is not None:
+            engine.state._last_update = float(row[2])
+
+        for row_s in db.execute("SELECT * FROM scars"):
+            tag, cnt, shift, pos, last = row_s
+            engine.scars.patterns[tag] = SensitizationPattern(
+                tag=tag, trigger_count=cnt, threshold_shift=shift,
+                positive_counter=pos, last_triggered=last,
+            )
+        return True
+    finally:
+        db.close()
 
 
 # ══════════════════════════════════════════════════════
@@ -932,11 +761,14 @@ class MemoryStoreDB:
         self._pending: List[Tuple[float, "MemoryItem"]] = []
 
     def store(self, item: "MemoryItem"):
-        self.db.execute(
+        cursor = self.db.execute(
             "INSERT INTO memories (content,tier,arousal,relevance,emotion_snap,timestamp) "
             "VALUES (?,?,?,?,?,?)",
             (item.content, item.tier, item.arousal, item.relevance,
              json.dumps(item.emotion_snap), item.timestamp))
+        # consolidate() 依赖 _db_id 更新 tier；之前没写回，
+        # 导致 WHERE id=NULL 永远匹配不到，长期记忆晋升实际失效。
+        item._db_id = int(cursor.lastrowid)
         self.db.commit()
         self._pending.append((item.timestamp, item))
 
@@ -1209,12 +1041,18 @@ class MemoryStore:
 # 已经足够决定角色的反应。只在深度对话时才调用 LLM。
 
 # 行为倾向映射
-def _action_tendency(state: "EmotionalState", atmos: float) -> str:
+def _action_tendency(state: "EmotionalState", atmos: float,
+                     zone: str = "regulated") -> str:
     """从情绪状态推导行为倾向——趋近 or 回避 or 防御"""
     approach = state.joy + state.trust + state.love
     avoid    = state.fear + state.sadness + state.disgust
     if atmos > 0.3:
         avoid *= 1.3  # 紧绷氛围放大回避
+    if zone == ZONE_HYPER:
+        approach *= 0.85  # 过载时战/逃，趋近冲动下降
+        avoid *= 1.25
+    elif zone == ZONE_HYPO:
+        approach *= 0.75  # 关机状态，连回避都变得迟缓
     if approach > avoid * 1.2:
         return "approach"   # 趋近——想靠近
     elif avoid > approach * 1.2:
@@ -1320,21 +1158,34 @@ _CHARACTER_POOLS = {
 # LLM 增强模式 — 可选。引擎已算完情绪，LLM 只负责表达。
 # ══════════════════════════════════════════════════════
 
+def _emotion_snapshot(state: "EmotionalState") -> Dict[str, float]:
+    """把状态压成可存入关系记忆的纯数值快照。"""
+    return {ch.value: float(getattr(state, ch.value, 0.0)) for ch in Channel}
+
+
 def _build_llm_prompt(engine: "EmotionEngine", user_input: str,
                       character_name: str, character_desc: str,
-                      recent_memories: List["MemoryItem"]) -> str:
-    """构建 LLM prompt——引擎状态已注入，LLM 只做表达。"""
+                      recent_memories: List["MemoryItem"],
+                      memory_context: str = "") -> str:
+    """构建 LLM prompt——引擎状态已注入，LLM 只做表达。
+
+    memory_context 来自 memory.MemoryService.build_context()，
+    是关系域、压缩后的记忆区块；优先于旧版的 recent_memories。
+    """
     s = engine.state
-    scars = engine.scars.all_scars()
     mem_text = ""
-    if recent_memories:
+    if memory_context:
+        mem_text = memory_context
+    elif recent_memories:
         mem_text = "Relevant memories:\n" + "\n".join(
             f"- {m.content}" for m in recent_memories[:3]
         )
 
     dominant = _dominant_channel(s)
     # 将数值翻译成 AI 能理解的行为指令
-    mood_hint = _mood_hint(s, dominant, engine.atmosphere)
+    mood_hint = _mood_hint(
+        s, dominant, engine.atmosphere, engine.tolerance.to_dict(),
+    )
 
     return f"""You are {character_name}. {character_desc}
 
@@ -1351,7 +1202,8 @@ Respond in character. 2-3 natural Chinese sentences, spoken aloud (not narration
 Your mood affects HOW you speak — see the mood hint above and let it color your tone."""
 
 
-def _mood_hint(s: "EmotionalState", dominant: str, atmosphere: float) -> str:
+def _mood_hint(s: "EmotionalState", dominant: str, atmosphere: float,
+               tolerance: Optional[Dict[str, object]] = None) -> str:
     """将情绪数值翻译成 LLM 能理解的口吻描述"""
     parts = []
 
@@ -1388,11 +1240,18 @@ def _mood_hint(s: "EmotionalState", dominant: str, atmosphere: float) -> str:
     elif s.love < 0.1:
         parts.append("你不在意对方，冷淡敷衍")
 
-    # 氛围
+    # 氛围：+1 紧绷 / -1 轻松
     if atmosphere > 0.3:
-        parts.append("氛围轻松，你比较放得开")
-    elif atmosphere < -0.3:
         parts.append("氛围紧绷，你紧张克制")
+    elif atmosphere < -0.3:
+        parts.append("氛围轻松，你比较放得开")
+
+    # 耐受窗：超过容量后不是“更激烈地演”，而是失去调节能力
+    zone = tolerance.get("zone") if tolerance else None
+    if zone == ZONE_HYPER:
+        parts.append("你已经超出耐受窗：容易战或逃，语气更冲、更防御，很难继续忍耐")
+    elif zone == ZONE_HYPO:
+        parts.append("你已经超出耐受窗并进入低唤醒：反应变慢、想关机、话变少，这不是平静")
 
     # 愧疚
     if s.guilt > 0.3:
@@ -1414,20 +1273,46 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
                 model: str = "deepseek-chat",
                 fallback_key: Optional[str] = None,
                 fallback_url: str = "https://api.moonshot.cn/v1",
-                fallback_model: str = "moonshot-v1-8k") -> Dict:
+                fallback_model: str = "moonshot-v1-8k",
+                memory_context: Optional[str] = None,
+                relationship_memory: Any = None,
+                user_id: str = "default",
+                record_turn: bool = True) -> Dict:
     """
     LLM 增强回应——引擎算情绪，LLM 写表达。
     主 API 失败 → fallback API → 都失败则回退到本地模板。
+
+    relationship_memory: 可选的 memory.MemoryService。
+      传入后，用关系域记忆构建 prompt，并在回复后尝试抽取记忆。
+    memory_context: 外部已构建好的记忆区块；优先级高于自动召回。
     """
     # 先跑情绪引擎
     local = respond(engine, user_input, character_id=character_id)
 
-    # 召回相关记忆
-    recent = engine.memory.recall(engine.state, len(local.get("shock_channels", [])))
+    # 旧版全局记忆（没有关系域记忆服务时使用）
+    recent = []
+    if relationship_memory is None:
+        recent = engine.memory.recall(
+            engine.state, len(local.get("shock_channels", []))
+        )
+
+    # 新版关系域记忆：按 character_id × user_id 隔离召回
+    relational_context = memory_context or ""
+    if relationship_memory is not None and not relational_context:
+        try:
+            relational_context = relationship_memory.build_context(
+                character_id=character_id,
+                user_id=user_id,
+                query=user_input,
+            )
+        except Exception as exc:
+            relational_context = ""
+            local["_memory_context_error"] = str(exc)
 
     # 构建 prompt
     prompt = _build_llm_prompt(engine, user_input, character_name,
-                               character_desc, recent)
+                               character_desc, recent,
+                               memory_context=relational_context)
 
     # 按顺序尝试 API：主 → fallback
     backends = [
@@ -1469,6 +1354,20 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
     if llm_text:
         local["utterance"] = llm_text
     # 否则保持 local 的模板 utterance
+
+    # 回复后抽取记忆（当前同步执行；生产环境可挪到后台队列）。
+    # 抽取器只写高置信事实/边界/承诺，不会把整段对话塞进库。
+    if record_turn and relationship_memory is not None:
+        try:
+            relationship_memory.remember_turn(
+                character_id=character_id,
+                user_id=user_id,
+                user_text=user_input,
+                assistant_text=local.get("utterance", ""),
+                emotion_snap=_emotion_snapshot(engine.state),
+            )
+        except Exception as exc:
+            local["_memory_error"] = str(exc)
 
     return local
 
@@ -1521,8 +1420,12 @@ def respond(engine: "EmotionEngine", event_type: str,
             "head_tilt":      round(engine.state.sadness * 0.3 + engine.state.guilt * 0.2, 3),
         },
         # 行为
-        "action":          _action_tendency(engine.state, atmos),
+        "action":          _action_tendency(
+            engine.state, atmos,
+            result.get("tolerance", {}).get("zone", "regulated"),
+        ),
         "atmosphere":      round(atmos, 3),
+        "tolerance":       result.get("tolerance", {}),
         # 简短回应（模板，非 LLM）
         "utterance":       utterance,
         # 是否建议调 LLM
@@ -1547,7 +1450,7 @@ if __name__ == "__main__":
     for ch, val in bl.items():
         setattr(state, ch.value, val)
 
-    db = init_db("test_emotion.db")
+    init_db("test_emotion.db").close()
     engine = EmotionEngine(state=state, personality=pers,
                            memory=MemoryStoreDB("test_emotion.db"),
                            scars=SensitizationStore())
@@ -1616,6 +1519,8 @@ if __name__ == "__main__":
     else:
         print("  Restore failed")
 
-    # 清理
+    # 清理：两个引擎的 SQLite 连接都要关，否则 Windows 无法删除文件。
+    engine.memory.db.close()
     engine2.memory.db.close()
-    os.remove("test_emotion.db")
+    if os.path.exists("test_emotion.db"):
+        os.remove("test_emotion.db")

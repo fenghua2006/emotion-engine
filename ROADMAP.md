@@ -37,9 +37,69 @@
 - 情绪驱动语音参数（speed/pitch 随引擎通道变化）
 - 桌面双击即用的 furina_bridge.py
 
-## v0.7 — MCP 封装
+## 记忆 v0.1 ✅ — 关系域长期记忆
+- 按 `(character_id, user_id)` 隔离的 SQLite 记忆
+- 卡片 / 结构化事实 / 关系状态 / 开放循环
+- CJK bigram + FTS5 检索；无 embedding 依赖
+- 预算打包（cards / facts / relationship / open loops，≤1200 字）
+- 规则抽取身份、偏好、边界、承诺
+- `respond_llm()` 可选接入 `memory_context` / `relationship_memory`
+- 19 个 unittest；详细设计见 `docs/MEMORY_SYSTEM.md`
+
+## 耐受空间 v0.7 ✅ — 忍耐空间
+- `tolerance.py`：load / capacity / regulated-hyper-hypo
+- 负荷只取负性通道相对基线的偏离；trust/love 扩展容量
+- 两 tick 滞回；hyper 放大负性输入并拖慢恢复，hypo 降低反应
+- `tick()` / `wake()` 注入时钟；快照完整持久化
+- 22 个 unittest（14 tolerance + 8 engine integration）
+- 详细设计见 `docs/TOLERANCE.md`
+
+## 增量开发 L0 ✅ — 核心情绪线
+- `core.py`：通道 / 衰减 / 六维评估 / 门控 / 交互 / 慢通道，不依赖上层
+- `engine.py` 保留组合根与旧 import 路径
+- `tick(trace=True)` 返回 `StepTrace` 分阶段快照，不改变计算
+- 28 个 core 测试；旧 41 个测试全部通过（合计 69）
+- 记录两个待修顺序问题：氛围门控写入过晚、shock 密度采样过早
+- 详细契约见 `docs/CORE.md`；完整 L0–L6 安排见 `docs/INCREMENTAL_PLAN.md`
+
+## 增量开发 L1 ✅ — 六条快通道
+- `fastline.py`：固定人格 / 固定 trust-love / 固定时钟的六通道参考线
+- 46 条冻结事件 + 双 golden（当前 + v0.7 legacy）
+- 22 个 L1 测试 + 11 个交互测试，golden 误差 < `1e-9`；L1 阶段全量 102 tests OK
+- 详细设计见 `docs/L1_FAST_CHANNELS.md`
+
+## 增量开发 L1.1 ✅ — 交互激活修复
+- 根因：交互矩阵用绝对通道值 0.05 做门槛，surprise / disgust 基线被当成激活
+- 修复：基线相对激活 + 快通道目标共激活；`legacy_interactions=True` 保留旧行为
+- 空闲 300 tick：joy 0.4220 → 0.3500，fear 0.1920 → 0.1050，anger 0.1239 → 0.0550
+- 纯负面事件 joy：0.4119 → 0.3500；正面事件不再获得无来源 fear / anger
+- 剩余已知问题：dominant 基线偏差
+- 对照数据见 `docs/L1_FAST_CHANNELS.md` §5
+
+## 增量开发 L2 ✅ — 慢通道与缺失通道
+- `slowline.py`：固定人格 / 固定时钟的十通道参考线（在线 tick + 离线 wake）
+- 19 条冻结事件 + 双 golden（当前 L2 + 旧慢通道 / 绝对阈值对照）
+- 32 个 L2 测试；四套 golden 误差 < `1e-9`；全量 134 tests OK
+- trust 交互基线 = `trust_target(love)`，love / 快通道 / guilt = 人格基线
+- guilt 在 `self_agency ≤ 0.3` 时严格为 0；外部归因不产生愧疚
+- love 正面事件改为按区间输入；trust / love 数值护栏与 trust 目标封顶
+- 30 天模拟 trust 0.872741 = target，love 1.959433，不发散
+- `legacy_slow_channels` + `legacy_interactions` 保留旧曲线
+- 详细设计见 `docs/L2_SLOW_CHANNELS.md`
+
+## 增量开发 L3.5 — 元情绪（设计已记录）
+- 元情绪是二阶过程，不是第 11 个基础通道
+- `target` 指向 primary channel；`kind`：shame / guilt / pride / contempt / compassion / interest / fear
+- 元评估四维：goal / social / control / identity
+- 只输出表达、调节、耐受的有界偏置；不改 `core.py`，不写 `Personality`
+- 关闭时 L1/L2/L3 曲线完全不变；默认开关关闭
+- 设计根因、文献与验收见 `docs/META_EMOTION.md`
+
+## v0.7 — MCP 封装（进行中）
 - Claude Code / Codex 直接调引擎
 - /emotion tick / /emotion recall
+- 记忆系统接入 appraisal / 自动关系摘要
+- 仪表盘展示 tolerance 区间带
 
 ## v0.8 — 多角色交互
 - 两个 EmotionEngine 实例间的情绪感染
