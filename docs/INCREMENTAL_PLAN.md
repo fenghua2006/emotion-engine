@@ -14,7 +14,7 @@
 | **L1** | 六条快通道 | ✅ 2026-10-26（L1.1 修复交互激活） | 46 条事件双 golden 不漂移；22 + 11 个测试通过 |
 | **L2** | trust / love / longing / guilt | ✅ 2026-10-26 | 19 条事件双 golden；32 个 L2 测试；trust 30 天不发散；guilt 门槛锁定 |
 | **L3** | 氛围与伤疤 | ✅ 2026-10-26 | 顺序修正可 A/B；shock 密度非零；伤疤三通道 ≤60%；166 tests |
-| **L3.5** | 元情绪：二阶评估与调节意图 | ⏳ 设计已记录 | 不新增通道；关闭时 L1/L2 golden 与 L3 A/B 不变 |
+| **L3.5** | 元情绪：二阶评估与调节意图 | ✅ 2026-10-26（v0 trace-only） | 不新增通道；关闭时四套 golden 与 L3 A/B 不变；191 tests |
 | **L4** | 关系域记忆 | ⏳ | 记忆不写 Personality；预算可控 |
 | **L5** | 忍耐空间 | ⏳ 已实现待校准 | 参数有 golden set 依据 |
 | **L6** | 表达 / LLM / JEV / MCP | ⏳ | 全链路可回退、可观测 |
@@ -218,7 +218,7 @@ legacy 同事件逐值保留：atmosphere -0.3774803783593781，
 
 详细记录见 [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md)。
 
-## L3.5：元情绪
+## L3.5：元情绪 ✅ v0（trace-only）
 
 目标：让引擎能回答“角色对这个情绪本身是什么态度”，而不是只回答“角色有多愤怒”。
 
@@ -229,25 +229,46 @@ legacy 同事件逐值保留：atmosphere -0.3774803783593781，
 - 元评估四维：`goal_conduciveness`、`social_acceptability`、`controllability`、`identity_congruence`。
 - 输出只做有界偏置：表达、调节意图、耐受负荷；不改写 `core.py` 公式，不写 `Personality`。
 - 角色稳定倾向放 `MetaEmotionProfile`，瞬时状态放 `MetaEmotionState`。
+- **v0 只写 trace**：`regulation_bias` 不进入 `respond()`、tolerance 或下一 tick appraisal。
 
-工作：
+交付：
 
-1. 定义 `MetaEmotion` / `MetaAppraisal` / `MetaEmotionProfile`。
-2. 实现 `meta_appraise()` 与 `meta_regulate()`。
-3. `StepTrace` 增加 `meta_appraisal` / `meta_emotions` / `regulation_bias`。
-4. 默认关闭；开启后不改变旧曲线，只增加表达/调节/耐受偏置。
-5. 至少一个角色 demo 对比“愤怒→羞耻→压抑”与“愤怒→骄傲→表达”。
+- `meta_emotion.py`：纯函数层，五个 frozen dataclass；双阈值激活
+  （`felt_diff ≥ 0.04`、`raw_excess ≥ 0.03`）；四维公式；七个 kind、六个 action；
+  `meta_appraise()` / `meta_regulate()` / `evaluate_meta_emotion()`。
+- `core.py`：`StepTrace` 增加 `meta_enabled / meta_appraisal / meta_emotions /
+  regulation_bias`，仅开启时序列化。
+- `engine.py`：`meta_emotion_enabled=False`、`meta_emotion_profile=None`；
+  `trace=False` 时完全不计算。
+- `characters/furina.py`：`furina_meta_shame_profile` / `furina_meta_pride_profile`；
+  `create_furina()` 现有无参调用保持兼容。
+- `characters/meta_emotion_demo.py`：同一 anger、同一状态、同一时钟，
+  shame profile → `shame 0.585 / suppress`，pride profile → `pride 0.340 / express`。
+- `test_l3_5_meta_emotion.py`：25 个测试，含 AST 模块边界与 snapshot 不持久化。
+- `docs/META_EMOTION.md`：激活规则、公式、profile schema、trace 形状、验收结果。
 
-验收：
+边界：
 
-- 关闭元情绪层时，L1/L2 四套 golden 不变，L3 corrected / legacy A/B 场景逐值不变。
-- 开启后基础通道值不被直接改写。
-- 连续 20 个事件无 NaN / Inf / 越界。
-- 至少一个角色 demo 退出码 0。
+- 不新增情绪通道；不接 JEV / LLM 生成元情绪；不改 tolerance 参数；
+  不持久化 meta state / profile / enable 开关；不新增 golden，不重新生成 fixtures。
+- `tolerance_load_bias`、`expression_gain`、`display_rule` 目前均为观测值，
+  L5 / L6 接入时必须新增开关、默认关闭、重跑 golden 与 A/B。
+
+验收结果：
+
+```text
+25 L3.5 tests, OK
+191 tests total, OK
+四套 golden 全部通过：L1 current / L1 legacy / L2 current / L2 legacy
+meta 关闭 trace 仍为原 27 键；开启只增加 4 键
+meta 开启 + trace=False 与关闭逐值相同
+L3 corrected：atmosphere -0.200000，shock density 0.714300
+L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
+  anger 0.5079335958919840，fear 0.6160595893163425
+所有角色 demo 与 meta demo 退出 0，fixtures/ 无 diff
+```
 
 详细设计见 [`META_EMOTION.md`](META_EMOTION.md)。
-
-不新增情绪通道；不接 JEV / LLM 生成元情绪；不改 tolerance 参数；不在 L1/L2 提前实现。
 
 ## L4：关系域记忆
 

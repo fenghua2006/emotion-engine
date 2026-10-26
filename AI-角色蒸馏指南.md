@@ -109,6 +109,52 @@ def create_<name>() -> EmotionEngine:
     )
 ```
 
+### 2.5 可选的元情绪 profile（L3.5）
+
+元情绪是“角色对自己情绪的态度”，不是第 11 个通道。默认关闭、默认中性：
+没有 profile 时，引擎不会把“愤怒”固定解释成“羞耻”；标签由四维规则决定。
+
+如果角色有稳定的二阶倾向，可以额外定义：
+
+```python
+from engine import MetaEmotionProfile
+
+<name>_meta_profile = MetaEmotionProfile(
+    name="<name>_meta",
+    kind_weights={
+        # target 的 kind 权重，限制在 0..2；未列出的 kind 默认 1.0
+        "anger": {"shame": 2.0, "pride": 0.2, "interest": 0.4},
+    },
+    action_bias={
+        # 只加 0.25 的偏置，不是硬覆盖
+        "anger": "suppress",
+    },
+)
+```
+
+工厂函数透传开关：
+
+```python
+def create_<name>(
+    meta_emotion_enabled: bool = False,
+    meta_emotion_profile=None,
+) -> EmotionEngine:
+    ...
+    return EmotionEngine(
+        ...,
+        meta_emotion_enabled=meta_emotion_enabled,
+        meta_emotion_profile=meta_emotion_profile,
+    )
+```
+
+注意事项：
+
+- profile 不写 `Personality`，也不是 OCEAN 的一部分；
+- v0 只在 `trace=True` 时输出，不改变 `respond()`、tolerance 或基础曲线；
+- 只传 profile 不会自动开启，必须显式 `meta_emotion_enabled=True`；
+- 参考实现：`characters/furina.py` 的两个 profile 与
+  `characters/meta_emotion_demo.py`。
+
 ---
 
 ## 三、接入仪表盘

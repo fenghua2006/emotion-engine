@@ -117,6 +117,11 @@ from core import (
     trust_target,
 )
 
+from meta_emotion import (
+    MetaEmotionProfile,
+    evaluate_meta_emotion,
+)
+
 
 @dataclass
 class EmotionEngine:
@@ -143,6 +148,10 @@ class EmotionEngine:
     # L3: False = 修正后的氛围顺序 / 非零 shock 密度 / [-1,1] clamp；
     # True = 复现 pre-L3 的晚调制、零密度、无 clamp 与旧 trace notes。
     legacy_atmosphere: bool = False
+    # L3.5: v0 元情绪只做 trace 观测，默认关闭。单独传 profile 不会自动开启；
+    # 必须显式 meta_emotion_enabled=True。profile 是角色配置，不写入快照。
+    meta_emotion_enabled: bool = False
+    meta_emotion_profile: Optional[MetaEmotionProfile] = None
 
     def _scar_pressure(self) -> float:
         """旧伤疤对耐受窗的压缩程度。取最强的一条，不累加。"""
@@ -588,6 +597,28 @@ class EmotionEngine:
             trace_data.atmosphere_shock_density = shock_density
             trace_data.atmosphere_arousal = atmosphere_arousal
             trace_data.tolerance_zone = self.tolerance.zone
+            # L3.5: 元情绪只读最终状态与上下文，只写 trace。
+            # 放在所有 state / atmosphere / tolerance 更新之后，确保不反向
+            # 影响本 tick 或后续曲线。
+            if self.meta_emotion_enabled:
+                meta_state = evaluate_meta_emotion(
+                    state=self.state,
+                    baseline=self.personality.baseline(),
+                    personality=self.personality,
+                    appraisal=appraisal,
+                    atmosphere=self.atmosphere,
+                    tolerance_zone=self.tolerance.zone,
+                    overload_ratio=self.tolerance.overload_ratio,
+                    scar_pressure=trace_data.scar_shift,
+                    scar_channels=tuple(trace_data.scar_channels),
+                    blends=tuple(blends),
+                    profile=self.meta_emotion_profile,
+                )
+                meta_payload = meta_state.to_trace_dict()
+                trace_data.meta_enabled = True
+                trace_data.meta_appraisal = meta_payload["meta_appraisal"]
+                trace_data.meta_emotions = meta_payload["meta_emotions"]
+                trace_data.regulation_bias = meta_payload["regulation_bias"]
 
         # 输出
         felt = self.state.felt_all()

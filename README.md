@@ -116,7 +116,7 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；全量 166 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；全量 191 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - L0–L6 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
@@ -127,7 +127,8 @@ trace = result["trace"]
 
 - 46 条冻结事件：角色 31 + engine demo 3 + 合成边界 12。
 - 双 golden：`fixtures/l1_golden.json`（当前）+ `l1_golden_legacy.json`（v0.7 对照），误差 < `1e-9`。
-- 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 **166 tests, OK**。
+- 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 166 tests，
+  L3.5 完成后 **191 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -172,18 +173,44 @@ appraise → gate → tolerance gain → scar amplification
 - **伤疤**：只放大 sadness / fear / anger；effective shift ≤0.6，最大乘数 1.6；
   正面事件与 `goal_conducibility ≥ 0` 不放大。
 - 32 个 L3 测试：氛围数学 7、伤疤数学 7、顺序 A/B 9、伤疤对照 3、快照 4、模块边界 2；
-  全量 **166 tests, OK**；L1/L2 四套 golden 逐位未变。
+  L3 完成时全量 166 tests；L1/L2 四套 golden 逐位未变。
 - 单次严重事件：corrected atmosphere `-0.200000`、shock density `0.714300`（5/7）；
   legacy 精确保留 `-0.3774803783593781`。
 - 详细公式、A/B 数据与“为什么不设 L3 golden”：[`docs/L3_ATMOSPHERE_SCARS.md`](docs/L3_ATMOSPHERE_SCARS.md)。
 - 测试：`python -m unittest test_l3_atmosphere_scars.py -v`。
 
-## 元情绪（L3.5，设计已记录）
+## 元情绪（L3.5 v0，trace-only）
 
-元情绪不是第 11 个情绪通道，而是“以某个 primary emotion 为对象”的二阶过程：羞耻于愤怒、内疚于快乐、对恐惧感兴趣、为自己的平静骄傲。它只读取 `StepTrace`，输出表达、调节和耐受的有界偏置，不改写 `core.py` 公式，也不写 `Personality`。
+元情绪不是第 11 个情绪通道，而是“以某个 primary emotion 为对象”的二阶过程：羞耻于愤怒、内疚于快乐、对恐惧感兴趣、为自己的平静骄傲。它读取最终状态与 `StepTrace`，输出表达、调节和耐受的有界偏置，不改写 `core.py` 公式，也不写 `Personality`。
 
-- 设计根因、文献地图与 L3.5 验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)
-- 计划位置：L3 氛围/伤疤之后，L4 记忆之前。
+```python
+from engine import EmotionEngine, MetaEmotionProfile
+
+engine = EmotionEngine(
+    ...,
+    meta_emotion_enabled=True,
+    meta_emotion_profile=MetaEmotionProfile(
+        name="shame_about_anger",
+        kind_weights={"anger": {"shame": 2.0, "pride": 0.2}},
+        action_bias={"anger": "suppress"},
+    ),
+)
+result = engine.tick(appraisal, trace=True)
+print(result["trace"]["meta_emotions"])
+# [{'target': 'anger', 'kind': 'shame', 'intensity': 0.585, ...,
+#   'action': 'suppress'}, ...]
+```
+
+- **默认关闭**：关闭时 trace 仍是原来的 27 个键，四套 golden 与 L3 A/B 逐位不变。
+- **开启方式**：只有 `meta_emotion_enabled=True` 且 `trace=True` 才计算并追加
+  `meta_enabled / meta_appraisal / meta_emotions / regulation_bias`；`trace=False` 不计算。
+- **中性默认**：无 profile 时不预设“愤怒→羞耻”；标签由四维元评估与通用规则决定。
+- **v0 只观测**：`expression_gain`、`display_rule`、`tolerance_load_bias` 尚未被
+  `respond()`、tolerance 或下一 tick 消费。
+- 同一 anger 的两种二阶态度：
+  `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
+- 25 个 L3.5 测试；全量 **191 tests, OK**。
+- 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
 ## 关系域长期记忆 v0.1

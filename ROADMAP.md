@@ -98,13 +98,21 @@
 - 不设 L3 golden；契约由纯函数测试 + A/B + 一条 pre-L3 精确值锁定
 - 详细设计见 `docs/L3_ATMOSPHERE_SCARS.md`
 
-## 增量开发 L3.5 — 元情绪（设计已记录，下一层）
-- 元情绪是二阶过程，不是第 11 个基础通道
-- `target` 指向 primary channel；`kind`：shame / guilt / pride / contempt / compassion / interest / fear
-- 元评估四维：goal / social / control / identity
-- 只输出表达、调节、耐受的有界偏置；不改 `core.py`，不写 `Personality`
-- 关闭时 L1/L2 四套 golden 不变、L3 corrected / legacy A/B 场景逐值不变；默认开关关闭
-- 设计根因、文献与验收见 `docs/META_EMOTION.md`
+## 增量开发 L3.5 ✅ — 元情绪 v0（trace-only）
+- 新增纯模块 `meta_emotion.py`：五个 frozen dataclass + `meta_appraise()` /
+  `meta_regulate()` / `evaluate_meta_emotion()`
+- 元情绪是二阶过程，不是第 11 个基础通道；`target` 指向 primary channel
+- `kind`：shame / guilt / pride / contempt / compassion / interest / fear；
+  `action`：accept / suppress / ruminate / express / repair / avoid
+- 元评估四维：goal / social / control / identity；双阈值激活（felt 0.04 + raw 0.03）
+- `StepTrace` 开启时追加 `meta_enabled / meta_appraisal / meta_emotions /
+  regulation_bias`；关闭时仍是原 27 键
+- 默认中性：无 profile 时不预设“愤怒→羞耻”；`furina_meta_shame_profile` /
+  `furina_meta_pride_profile` 展示同一 anger 的两种二阶态度
+- v0 只观测：bias 不进入 `respond()`、tolerance 或下一 tick appraisal
+- 25 个 L3.5 测试；全量 191 tests OK；四套 golden 与 L3 A/B 逐值不变
+- demo：`characters/meta_emotion_demo.py` → shame 0.585 / suppress vs pride 0.340 / express
+- 设计根因、公式与验收见 `docs/META_EMOTION.md`
 
 ## v0.7 — MCP 封装（进行中）
 - Claude Code / Codex 直接调引擎

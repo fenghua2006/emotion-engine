@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-多通道情绪交互引擎 — a 10-channel emotion engine for AI companions. Replaces the 1974 PAD (Pleasure-Arousal-Dominance) model with independent emotion channels that modulate each other without canceling. MIT license. Pure dynamics live in `core.py`; `engine.py` is the composition root (~1,450 lines) plus `tolerance.py` and `memory.py` modules.
+多通道情绪交互引擎 — a 10-channel emotion engine for AI companions. Replaces the 1974 PAD (Pleasure-Arousal-Dominance) model with independent emotion channels that modulate each other without canceling. MIT license. Pure dynamics live in `core.py`; `engine.py` is the composition root (~1,650 lines) plus `atmosphere.py`, `meta_emotion.py`, `tolerance.py`, and `memory.py` modules.
 
 Owner: 枫骅 (fenghua2006). GitHub: `github.com/fenghua2006/emotion-engine`.
 
@@ -27,6 +27,9 @@ uv run python characters/furina.py
 uv run python characters/kokomi.py
 uv run python characters/columbina.py
 
+# L3.5 meta-emotion demo (shame/suppress vs pride/express)
+uv run python characters/meta_emotion_demo.py
+
 # Scenario test
 uv run python test_iloveyou.py
 
@@ -36,8 +39,9 @@ python -m unittest test_memory_system.py -v
 python -m unittest test_l1_fast_channels.py test_interaction_activation.py -v
 python -m unittest test_l2_slow_channels.py -v
 python -m unittest test_l3_atmosphere_scars.py -v
+python -m unittest test_l3_5_meta_emotion.py -v
 
-# Full suite (166 tests)
+# Full suite (191 tests)
 python -m unittest discover
 
 # L1 golden generation / verification
@@ -69,7 +73,7 @@ uv run python C:\Users\Administrator\Desktop\furina_fresh.py    # Baseline + sce
 
 ## Architecture
 
-Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Composition root: `engine.py` (~1,450 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
+Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,650 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
 
 ### L0 boundary
 
@@ -109,9 +113,16 @@ Default `legacy_atmosphere=False` (corrected):
 
 `legacy_atmosphere=True` preserves pre-L3 exactly: late gated modulation after state write, zero shock density, no clamp, and the two old `StepTrace.notes`. Snapshot payload includes the flag. `test_l3_atmosphere_scars.py` has 32 tests. There is deliberately no L3 golden: L3 is composition-root ordering, not a pure channel line; L1/L2 four goldens must stay unchanged. Details: `docs/L3_ATMOSPHERE_SCARS.md`.
 
-### Meta-emotion (planned L3.5; L3 prerequisite complete)
+### Meta-emotion (L3.5 v0, trace-only)
 
-Meta-emotion is a **second-order process**: an emotion about a primary emotion (e.g., shame about anger), not an 11th channel. It reads `StepTrace`, produces `meta_appraisal` / `meta_emotions` / `regulation_bias`, and may only supply bounded biases to expression, regulation, and tolerance load. It must not rewrite `core.py` formulas, change `Personality`, or add new base channels. Stable character tendencies belong in `MetaEmotionProfile`; momentary states belong in `MetaEmotionState`. Design: `docs/META_EMOTION.md`. L1/L2 must stay free of meta-emotion coupling.
+Meta-emotion is a **second-order process**: an emotion about a primary emotion (e.g., shame about anger), not an 11th channel. `meta_emotion.py` is a pure module importing only stdlib + `core` (enforced by an AST test). It computes `meta_appraisal` (four dimensions), `meta_emotions` (seven kinds), and `regulation_bias` (expression gain, display rule, regulation action, tolerance load bias, reappraisal targets), but v0 **does not consume** any bias: `respond()`, tolerance, and the next tick stay untouched.
+
+- Enable only with `EmotionEngine(meta_emotion_enabled=True)` plus `trace=True`; `trace=False` never computes meta-emotion.
+- Trace compatibility: disabled → original 27 keys; enabled → adds exactly `meta_enabled`, `meta_appraisal`, `meta_emotions`, `regulation_bias`. No top-level `result["meta_emotion"]`.
+- Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
+- Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
+- Not persisted: `MetaEmotionState` is per-tick; profile / enable flag are config and stay out of snapshots.
+- 25 tests in `test_l3_5_meta_emotion.py`; full suite 191 tests. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
 
 ### Core data flow
 
@@ -142,8 +153,9 @@ applies boundary/interactions, and detects shock — pre-L3 behavior for exact A
 | `EmotionalState` | 10-channel float state. `felt(ch)` returns log₁₀ perception. `delta(ch)` compares against `_previous` snapshot. |
 | `Personality` | OCEAN → `baseline()` maps Big Five to per-channel baselines. Locked — personality doesn't change. |
 | `Appraisal` | 6-dim cognitive evaluation: `goal_relevance`, `goal_conduciveness`, `expectedness`, `other_agency`, `coping_potential`, `social_evaluation`. All 0–1. |
-| `StepTrace` (`core.py`) | Phase snapshots + L3 atmosphere/scar observations from `tick(trace=True)`; observation only. |
+| `StepTrace` (`core.py`) | Phase snapshots + L3 atmosphere/scar + L3.5 meta observations from `tick(trace=True)`; observation only. |
 | `EmotionEngine` | Composition root. `tick(appraisal)` runs full update cycle. `wake()` handles offline time. Per-agent instance (one engine = one character). |
+| `MetaEmotionProfile` / `MetaEmotionState` (`meta_emotion.py`) | Stable character preferences vs per-tick second-order appraisal. v0 trace-only; not persisted. |
 | `MemoryItem` / `MemoryStoreDB` | Legacy SQLite-backed memory. Arousal-driven storage (not valence). 30-min consolidation window (Nielson 2007). |
 | `ToleranceState` (`tolerance.py`) | Window of tolerance. Negative-only load, trust/love expand capacity, two-tick hysteresis, hyper/hypo control multipliers. |
 | `RelationshipMemoryStore` / `MemoryService` (`memory.py`) | Relationship-scoped long-term memory: cards, facts, relationship summary, open loops. SQLite FTS5 + CJK bigrams. |
@@ -210,7 +222,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests.
 
 ## Related files (Desktop, not in repo)
 

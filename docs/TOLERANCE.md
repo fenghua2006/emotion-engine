@@ -193,6 +193,17 @@ print(result["tolerance"])
 都会把 atmosphere clamp 到 `[-1, 1]`；legacy 模式保持旧值不 clamp。tolerance 参数
 和 load / capacity 公式未因 L3 改变。
 
+### L3.5 元情绪负荷（仅观测）
+
+`meta_emotion.py` 会输出 `tolerance_load_bias`（`[0, 0.2]`，只统计
+`suppress / ruminate / avoid`），但 v0 **不喂给 `ToleranceState`**：
+
+- 当前 `load` / `capacity` / `zone` 完全不受元情绪影响；
+- 快照不保存 meta state、profile 或 enable 开关；
+- L5 接入时必须新增开关、默认关闭，并避免与伤疤负荷重复计数。
+  伤疤是事件记忆的放大，元情绪是对当前情绪的态度；两者可以叠加，但不能
+  对同一来源重复计负荷。
+
 ## 7. 与表达层
 
 - `respond()` 的 `action` 会参考 zone：hyper 压低趋近、放大回避；hypo 压低趋近。

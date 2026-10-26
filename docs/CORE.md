@@ -46,6 +46,8 @@ L0 core.py         纯公式：通道 / 衰减 / 评估 / 门控 / 交互 / 慢�
 - 任何 LLM / 网络 / SQLite
 
 `atmosphere.py` 只依赖 `core.Channel` 与标准库，不反向依赖 `engine.py`。
+`meta_emotion.py` 只依赖 `core` 与标准库（不导入 `engine` / `tolerance` /
+`memory` / `atmosphere` / SQLite / 网络库），由 AST 测试锁定。
 
 ### 上层规则
 
@@ -116,8 +118,17 @@ trace = result["trace"]
 | `scar_shift` | 实际生效的伤疤 shift（0 ~ 0.6） |
 | `scar_channels` | 被伤疤放大的通道 |
 | `gated_written` | 真正写入 state 的 gated |
+| `meta_enabled` | 本次 trace 是否计算了元情绪（仅开启时出现） |
+| `meta_appraisal` | 对 primary emotion 的四维元评估（仅开启时出现） |
+| `meta_emotions` | 本 tick 激活的元情绪列表（仅开启时出现） |
+| `regulation_bias` | 表达 / 调节 / 耐受的有界偏置（仅开启时出现） |
 
-L3 字段只观察，不参与计算。相位顺序：
+L3 字段只观察，不参与计算。L3.5 的四个 meta 字段同样只观察：
+`meta_emotion_enabled=False` 时 trace 仍只有原来的 27 个键；
+`meta_emotion_enabled=True` 且 `trace=True` 时才追加四个键。
+`trace=False` 时不计算元情绪，结果与关闭时逐值相同。
+
+L3 相位顺序：
 
 - corrected：`after_appraisal`（含氛围调制）→ `after_interaction` → shock →
   氛围漂移 → `after_atmosphere` → `final`；
@@ -133,8 +144,9 @@ L3 字段只观察，不参与计算。相位顺序：
 python -m unittest test_core_line.py test_tolerance.py \
   test_engine_tolerance.py test_memory_system.py \
   test_l1_fast_channels.py test_interaction_activation.py \
-  test_l2_slow_channels.py test_l3_atmosphere_scars.py -v
-# 166 tests, OK（含 32 个 L3 测试）
+  test_l2_slow_channels.py test_l3_atmosphere_scars.py \
+  test_l3_5_meta_emotion.py -v
+# 191 tests, OK（含 32 个 L3、25 个 L3.5 测试）
 ```
 
 另外验证了：
@@ -145,6 +157,7 @@ python test_iloveyou.py
 python characters/furina.py
 python characters/kokomi.py
 python characters/columbina.py
+python characters/meta_emotion_demo.py
 ```
 
 全部退出码 0。`test_trace_does_not_change_engine_result` 直接比较 `trace=False` 与 `trace=True` 的完整输出和最终状态。

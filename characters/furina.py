@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
     EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    MemoryStore, SensitizationStore, FAST_CHANNELS
+    MemoryStore, SensitizationStore, FAST_CHANNELS, MetaEmotionProfile
 )
 
 furina_name = "芙宁娜"
@@ -38,6 +38,24 @@ furina_personality = Personality(
     extraversion       = 0.25,  # 真正的她是内向的——"厌倦表演"
     agreeableness      = 0.70,  # 为枫丹牺牲一切，暗中拯救国家
     neuroticism        = 0.85,  # "透明且容易被看穿"、焦虑、脆弱
+)
+
+# L3.5 元情绪 profile 是可选的，不属于 Personality。
+# 同一个 anger，可以被体验成羞耻（压抑），也可以被体验成骄傲（表达）。
+furina_meta_shame_profile = MetaEmotionProfile(
+    name="furina_meta_shame",
+    kind_weights={
+        "anger": {"shame": 2.0, "pride": 0.2, "interest": 0.4, "fear": 0.8},
+    },
+    action_bias={"anger": "suppress"},
+)
+
+furina_meta_pride_profile = MetaEmotionProfile(
+    name="furina_meta_pride",
+    kind_weights={
+        "anger": {"pride": 2.0, "shame": 0.2, "interest": 0.4, "fear": 0.4},
+    },
+    action_bias={"anger": "express"},
 )
 
 
@@ -140,13 +158,23 @@ def furina_appraise(event_type: str) -> Appraisal:
 # 创建芙宁娜引擎实例
 # ═══════════════════════════════════════════════
 
-def create_furina():
+def create_furina(
+    meta_emotion_enabled: bool = False,
+    meta_emotion_profile=None,
+):
+    """创建芙宁娜引擎。L3.5 元情绪默认关闭，旧调用行为不变。"""
     state = EmotionalState()
     bl = furina_personality.baseline()
     for ch, val in bl.items():
         setattr(state, ch.value, val)
-    return EmotionEngine(state=state, personality=furina_personality,
-                         memory=MemoryStore(), scars=SensitizationStore())
+    return EmotionEngine(
+        state=state,
+        personality=furina_personality,
+        memory=MemoryStore(),
+        scars=SensitizationStore(),
+        meta_emotion_enabled=meta_emotion_enabled,
+        meta_emotion_profile=meta_emotion_profile,
+    )
 
 
 # ═══════════════════════════════════════════════

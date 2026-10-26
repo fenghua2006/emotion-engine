@@ -1,8 +1,13 @@
-# 元情绪（Meta-Emotion）设计
+# 元情绪（Meta-Emotion）
 
-> 状态：设计已记录，代码未实现；前置 L3 已于 2026-10-26 完成。
-> 计划层：**L3.5**（L3 氛围/伤疤之后，L4 记忆之前）。  
+> 状态：**L3.5 v0 已实现（trace-only）**；前置 L3 已于 2026-10-26 完成。  
+> 代码：`meta_emotion.py`；集成：`engine.py`；角色示例：`characters/furina.py`、`characters/meta_emotion_demo.py`；测试：`test_l3_5_meta_emotion.py`。  
+> 层：**L3.5**（L3 氛围/伤疤之后，L4 记忆之前）。  
 > 关联：`docs/CORE.md`、`docs/INCREMENTAL_PLAN.md`、`core.py`、`engine.py`。
+
+v0 的边界很窄：元情绪只读最终状态与 `StepTrace`，结果只进入 trace；
+不改变基础通道、tolerance、氛围、表达输出或 `Personality`。任何会改变曲线的
+消费都留给后续层，并必须重新做开关与 A/B。
 
 ## 1. 一句话结论
 
@@ -113,21 +118,25 @@ MetaEmotion(
     acceptance=0.1,          # 接受 vs 压抑
     control=0.2,             # 我能不能承受 / 调节
     action="suppress",       # accept / suppress / ruminate / express / repair / avoid
-    belief="anger makes me unlovable",
 )
 ```
 
-L3.5 的 v0 只要求：
+v0 实际实现的字段：
 
-- `target`：被指向的 primary channel；
-- `kind`：元情绪标签；
-- `valence`：−1..1；
-- `intensity`：0..1；
-- `acceptance`：0..1；
-- `control`：0..1；
-- `action`：调节意图。
+| 字段 | 范围 / 取值 |
+|---|---|
+| `target` | 10 个 `Channel` 之一 |
+| `kind` | `shame / guilt / pride / contempt / compassion / interest / fear` |
+| `valence` | 固定标签效价，−1..1 |
+| `intensity` | 0..1，经过 profile 权重后的 kind 分数 |
+| `acceptance` | 0..1，`0.45*control + 0.35*social + 0.20*identity` |
+| `control` | 0..1，对应 `MetaAppraisal.controllability` |
+| `action` | 六个调节动作之一 |
 
-`belief` 由角色档案或未来记忆层提供，不进入第一版公式。
+`belief` 由角色档案或未来记忆层提供，v0 不进入公式，也不进入 trace。
+
+同时实现 `MetaAppraisal`、`RegulationBias`、`MetaEmotionProfile`、`MetaEmotionState`，
+全部可序列化为纯 dict/list；`MetaEmotionState` 只属于当前 tick，不存到 engine 上。
 
 ### 4.2 元评估四维
 
@@ -140,12 +149,109 @@ L3.5 的 v0 只要求：
 | `controllability` | 我能不能承受、调节它？ | 可承受 / 可修复 |
 | `identity_congruence` | 它符合“我是谁”吗？ | 符合自我 / 角色 |
 
-映射（v0，可调）：
+**激活规则**：不是“绝对值超过 0.3”，而是相对该通道自己的参考值。
 
-- 低目标 + 低社会接受 + 自责 → 羞耻 / 内疚；
-- 高社会接受 + 高身份一致 → 骄傲 / 接纳；
-- 低可控 + 高威胁 → 对恐惧的恐惧；
-- 高兴趣 + 低威胁 → 好奇 / 接纳。
+- `trust` 的参考值是 `trust_target(love)`；其他通道用人格基线。
+- `felt_diff = felt(value) − felt(reference)`，`raw_excess = value − reference`。
+- 仅当 `felt_diff ≥ 0.04` 且 `raw_excess ≥ 0.03` 时激活；
+  `activation = clamp01(felt_diff / 0.25)`。
+
+这样既避免高基线通道（joy / trust）被当成“强烈情绪”，也避免低基线通道的
+微小数值波动触发元情绪。激活只决定“是否值得二阶评估”，不决定 kind。
+
+**四维公式**（全部 clamp 到 `[0,1]`；`support = 0.6·trust + 0.4·min(1,love)`）：
+
+```text
+goal = GOAL_BASE[target]
+     + 0.25·event_gc·valence_sign[target]
+     + 0.15·(event_coping − 0.5)·target_factor
+     + guilt 专属 self_agency 项
+     − 0.08·scar_target
+
+social = 0.5 + 0.35·event_social
+       + 0.15·(support − 0.5)
+       − 0.20·max(0, atmosphere)
+       + DISPLAY_NORM[target]
+       − 0.10·scar_target
+
+control = 0.5 + 0.25·(event_coping − 0.5)
+        + 0.15·(support − 0.5)
+        − 0.25·activation
+        − 0.20·overload_ratio
+        − zone_penalty
+        − 0.10·scar_target
+
+identity = 0.5 + 0.10·event_social
+         − 0.10·max(0, atmosphere)
+         + 0.05·(openness − 0.5)
+         − 0.05·(neuroticism − 0.5)
+         + 0.10·event_gc·valence_sign[target]
+```
+
+`zone_penalty`：regulated `0` / hyper `0.25` / hypo `0.15`。
+`GOAL_BASE` 与 `DISPLAY_NORM` 是通道级通用先验，不是角色 profile，也不规定
+“anger 必然是 shame”。v0 取值如下：
+
+| target | `GOAL_BASE` | `VALENCE_SIGN` | `DISPLAY_NORM` |
+|---|---:|---:|---:|
+| joy | 0.62 | +1 | +0.10 |
+| sadness | 0.38 | −1 | −0.10 |
+| anger | 0.50 | −1 | −0.10 |
+| fear | 0.45 | −1 | −0.10 |
+| disgust | 0.42 | −1 | −0.10 |
+| surprise | 0.55 | 0 | 0.00 |
+| guilt | 0.48 | −1 | −0.10 |
+| longing | 0.45 | 0 | 0.00 |
+| love | 0.62 | +1 | +0.10 |
+| trust | 0.65 | +1 | +0.10 |
+
+**标签分数**：先取四维相对 0.5 的缺口 / 超出量，
+`goal_low = max(0, 0.5−goal)` 等；`self_agency = 1 − other_agency`；
+`threat` 由负性均值、正氛围与 hyper zone 合成；`support` 同上。
+
+```text
+shame      = activation·(1.8·social_low + 1.2·identity_low + 0.6·goal_low)
+             ·(0.6 + 0.4·control_low)
+guilt      = activation·(1.8·goal_low + 0.8·social_low)
+             ·(0.5 + 0.5·self_agency)·(0.6 + 0.4·control_low)
+pride      = activation·(1.8·goal_high + 0.9·social_high + 0.6·identity_high)
+             ·(0.6 + 0.4·control_high)
+contempt   = activation·(1.5·social_low + 1.0·identity_low)
+             ·(0.6 + 0.4·control_high)
+compassion = activation·(0.6 + goal_low)·(0.3 + 0.7·control_high)
+             ·(0.5 + 0.5·support)·（负性 target 权重 1.0，否则 0.25）
+interest   = activation·(0.35·surprise_salience + 0.25·openness
+             + 0.20·(1−threat) + 0.10·mixedness)·0.6
+fear       = activation·(1.4·control_low + 0.4·goal_low)
+             ·(0.5 + 0.5·threat)
+```
+
+所有分数 clamp 到 `[0,1]`，乘 profile 权重后再阈值化：阈值 `0.18`，
+每个 target 最多保留 3 个 kind；多个 kind 可同时存在，不归一化、不抵消。
+
+**动作分数**（确定性取最大值，平分时按 `accept / suppress / ruminate /
+express / repair / avoid` 顺序）：
+
+```text
+accept   = 0.55·compassion + 0.35·interest + 0.20·pride + 0.20·control
+suppress = 0.75·shame + 0.45·contempt + 0.40·fear + 0.20·(1−control)
+ruminate = 0.75·guilt + 0.40·fear + 0.30·shame + 0.20·(1−control)
+express  = 0.75·pride + 0.40·interest + 0.25·social + 0.20·control
+repair   = 0.80·guilt + 0.45·compassion + 0.20·control
+avoid    = 0.70·fear + 0.40·contempt + 0.30·shame + 0.20·(1−control)
+```
+
+profile 的 `action_bias[target]` 只给指定动作加 `0.25`，不是硬覆盖。
+输出：
+
+- `expression_gain[target] = clamp(1 + Σ kind_gain·intensity, 0.5, 1.5)`；
+- `display_rule`：`accept/express → amplify`，`suppress/avoid → suppress`，
+  `repair/ruminate → qualify`；
+- `tolerance_load_bias = clamp(Σ suppress/ruminate/avoid 的 0.06·intensity, 0, 0.2)`；
+- `reappraisal_target`：主导 kind 对应的四维，去重后最多 2 项。
+
+v0 的 `tolerance_load_bias` **只记录，不喂给 tolerance**；表达增益和 display rule
+也**不喂给 `respond()`**。
 
 ### 4.3 输出只做有界偏置
 
@@ -153,38 +259,87 @@ L3.5 的 v0 只要求：
 
 ```python
 {
-    "meta_emotions": [MetaEmotion, ...],
-    "expression_gain": {"anger": 0.6, "fear": 0.3},
-    "display_rule": {"anger": "suppress", "joy": "amplify"},
+    "expression_gain": {"anger": 0.657},
+    "display_rule": {"anger": "suppress"},
     "regulation_action": {"anger": "suppress"},
-    "tolerance_load_bias": 0.08,
-    "reappraisal_target": ["social_acceptability"],
+    "tolerance_load_bias": 0.035,
+    "reappraisal_target": ["social_acceptability", "identity_congruence"],
 }
 ```
 
+上面只列 `anger` 一个 target 的示例值；实际 trace 会同时列出所有激活的
+target（demo 中还有 sadness / fear / disgust / surprise，总负荷偏置 0.0972）。
+
 约束：
 
-- 所有增益必须在有界区间内（例如 `0.5..1.5`）；
+- 所有增益都在显式区间内：`expression_gain ∈ [0.5, 1.5]`，
+  `tolerance_load_bias ∈ [0, 0.2]`，`kind.intensity / acceptance / control ∈ [0, 1]`；
 - 任何会改变曲线的参数必须有开关、默认关闭、前后对比；
 - 元情绪不能写 `Personality`，不能改 `baseline()`；
-- 元情绪不能直接改 `core.py` 的 `decay()`、`appraise()`、`gate_appraisal()`。
+- 元情绪不能直接改 `core.py` 的 `decay()`、`appraise()`、`gate_appraisal()`；
+- **v0 没有任何实际消费点**：`regulation_bias` 只作为 trace 观测，不进入
+  `respond()`、`tolerance.update()` 或下一 tick 的 appraisal。
 
 ### 4.4 StepTrace 扩展
 
-L3.5 在 `StepTrace` 增加：
+L3.5 在 `StepTrace` 增加四个字段：
 
 | 字段 | 含义 |
 |---|---|
-| `meta_appraisal` | 对 primary emotion 的四维元评估 |
+| `meta_enabled` | 本次 trace 是否计算了元情绪 |
+| `meta_appraisal` | 对 primary emotion 的四维元评估（key = target） |
 | `meta_emotions` | 本 tick 激活的元情绪列表 |
 | `regulation_bias` | 表达/调节/耐受的有界偏置 |
 
-仍然遵守 L0 契约：`trace=False` 行为不变；新增字段只在 `trace=True` 时出现。
+仍然遵守 L0 契约：
+
+- `trace=False` 行为完全不变，也不计算元情绪；
+- `meta_emotion_enabled=False` 时，trace 仍只有原来的 27 个键，新增字段不序列化；
+- 只有 `meta_emotion_enabled=True` 且 `trace=True` 时，`to_dict()` 才追加四个键；
+- 不新增 `mark()` phase，不增加 top-level `result["meta_emotion"]`。
+
+**开启方式**：
+
+```python
+engine = EmotionEngine(
+    ...,
+    meta_emotion_enabled=True,
+    meta_emotion_profile=None,  # None = 中性 profile
+)
+result = engine.tick(appraisal, trace=True)
+result["trace"]["meta_emotions"]
+```
+
+单独传 `meta_emotion_profile` 不会自动开启；必须显式设置
+`meta_emotion_enabled=True`。
 
 ### 4.5 稳定 profile 与瞬时 state 分开
 
 - **MetaEmotionProfile**：角色稳定的元情绪倾向，例如“恐惧→羞耻”“愤怒→骄傲”“快乐→内疚”。放在角色档案里，不写 `Personality`。
 - **MetaEmotionState**：当前事件触发的瞬时元情绪。
+
+v0 的 profile schema：
+
+```python
+MetaEmotionProfile(
+    name="furina_meta_shame",
+    kind_weights={
+        "anger": {"shame": 2.0, "pride": 0.2, "interest": 0.4, "fear": 0.8},
+    },
+    action_bias={"anger": "suppress"},
+)
+```
+
+- `kind_weights[target][kind]` 乘在通用 kind 分数上，限制在 `[0, 2]`；
+  未列出的 kind 权重为 `1.0`；未知 target / kind 忽略。
+- `action_bias[target]` 只给指定动作加 `0.25`，不是硬覆盖；未知动作忽略。
+- `profile=None` 等价于 `NEUTRAL_META_PROFILE`（`name="neutral"`，
+  `kind_weights={}`，`action_bias={}`）：不预设“愤怒→羞耻”等倾向。
+- **只传 profile 不会开启元情绪**；必须同时设置
+  `EmotionEngine(meta_emotion_enabled=True)`。
+
+**不持久化**：`MetaEmotionState` 只属于当前 tick；profile 与 enable 开关是
+配置，不写入 snapshot。`load_snapshot()` 行为不变。
 
 同一 `fear = 0.8` 的三种角色：
 
@@ -201,57 +356,130 @@ L3.5 在 `StepTrace` 增加：
 | 层 | 与元情绪的关系 |
 |---|---|
 | L0 | 提供通道、评估、`StepTrace`；元情绪只读 trace，不改公式 |
-| L1 | 六条快通道保持纯净；golden 测试不引入元情绪 |
+| L1 | 六条快通道保持纯净；四套 golden 不引入元情绪 |
 | L2 | 提供 guilt / trust / love，元情绪依赖这些慢通道与自我归因 |
 | L3 | ✅ 修正氛围/伤疤顺序；元情绪读取稳定的 atmosphere / scar 状态 |
-| **L3.5** | **元情绪层：二阶评估 + 调节意图 + 有界偏置** |
+| **L3.5** | ✅ **v0 已实现（trace-only）：二阶评估 + 调节意图 + 有界偏置** |
 | L4 | 记忆可提供元情绪信念与关系规范；元情绪不直接写记忆 |
-| L5 | 耐受可消费 `tolerance_load_bias`；不重复计算同一负荷 |
-| L6 | 表达层根据 `display_rule` 选择措辞/表情；LLM 只表达，不生成元情绪 |
+| L5 | 未来消费 `tolerance_load_bias`；必须避免与伤疤负荷重复计算 |
+| L6 | 未来消费 `display_rule` / `expression_gain`；LLM 只表达，不生成元情绪 |
 
-## 6. L3.5 范围与验收
+## 6. L3.5 v0 交付与验收
 
 ### 目标
 
 让引擎能够回答：**“角色对这个情绪本身是什么态度？”**  
 而不是只回答：**“角色现在有多愤怒？”**
 
-### 工作项
+### 已交付
 
-1. 定义 `MetaEmotion`、`MetaAppraisal`、`MetaEmotionProfile` 数据结构。
-2. 实现 `meta_appraise()`：primary channel → 四维元评估 → 元情绪标签。
-3. 实现 `meta_regulate()`：元情绪 → 有界表达/调节/耐受偏置。
-4. 接入 `engine.tick(trace=True)`，默认关闭；开启后只在 `trace` 中产生字段，不改变旧曲线。
-5. 增加 `StepTrace.meta_appraisal` / `meta_emotions` / `regulation_bias`。
-6. 在 `characters/*.py` 增加可选的 `meta_emotion_profile`。
-7. 对照测试：同一事件序列，开启/关闭元情绪层的曲线差异。
-8. 至少一个角色 demo 展示“愤怒→羞耻→压抑”与“愤怒→骄傲→表达”的差异。
+| 文件 | 内容 |
+|---|---|
+| `meta_emotion.py` | 纯函数层：五个 frozen dataclass、激活规则、四维公式、七 kind、六 action、`meta_appraise()` / `meta_regulate()` / `evaluate_meta_emotion()` |
+| `core.py` | `StepTrace` 增加 `meta_enabled` + 三个 meta 字段；仅开启时序列化 |
+| `engine.py` | `meta_emotion_enabled=False`、`meta_emotion_profile=None`；trace 分支内调用 |
+| `characters/furina.py` | `furina_meta_shame_profile`、`furina_meta_pride_profile`；`create_furina()` 可选参数 |
+| `characters/meta_emotion_demo.py` | 同一 anger、同一状态、同一时钟 → shame/suppress vs pride/express |
+| `test_l3_5_meta_emotion.py` | 25 个 `unittest`；覆盖兼容性、激活、数学、profile、调节、trace 安全 |
 
-### 验收
+`belief`、记忆、LLM、JEV 均未进入 v0。
 
-- 关闭元情绪层时，L1/L2 四套 golden 不变，L3 corrected / legacy A/B 场景逐值不变。
-- 开启后，基础通道值不被直接改写；只有表达/调节/耐受偏置变化。
-- 元情绪不写 `Personality`。
-- 同一 `target` 的元情绪可以同时存在（例如“羞耻 + 兴趣”），且不互相抵消。
-- 连续 20 个事件无 NaN / Inf / 越界。
-- 至少一个角色 demo 退出码 0。
+### 验收结果
+
+- ✅ `python -m unittest test_l3_5_meta_emotion.py -v`：**25 tests OK**。
+- ✅ `python -m unittest discover -v`：**191 tests OK**。
+- ✅ 四套 golden `--check` 全部通过，`fixtures/` 无 diff：
+  - `l1_golden.json` / `l1_golden_legacy.json`
+  - `l2_golden.json` / `l2_golden_legacy.json`
+- ✅ meta 关闭：trace 仍是原来的 27 个键，值逐位不变。
+- ✅ meta 开启：只增加 `meta_enabled / meta_appraisal / meta_emotions / regulation_bias`。
+- ✅ meta 开启 + `trace=False`：与关闭时结果逐值相同。
+- ✅ meta 开启 + `trace=True`：pop 掉 `trace` 后，所有基础字段与关闭时逐值相同。
+- ✅ L3 corrected：atmosphere `-0.200000`，shock density `0.714300`。
+- ✅ L3 legacy：atmosphere `-0.3774803783593781`，sadness `0.6125356194066094`，
+  anger `0.5079335958919840`，fear `0.6160595893163425`。
+- ✅ 现有角色 demo（`engine.py`、`test_iloveyou.py`、`characters/furina.py`、
+  `characters/kokomi.py`、`characters/columbina.py`）退出 0，输出行为不变。
+- ✅ `characters/meta_emotion_demo.py` 退出 0：
+  - shame profile → `anger meta: shame intensity=0.585 action=suppress`；
+  - pride profile → `anger meta: pride intensity=0.340 action=express`；
+  - 两个引擎的基础通道逐值一致。
+- ✅ 连续 20 个正负事件无 NaN / Inf / 越界；无 top-level `result["meta_emotion"]`。
+- ✅ snapshot 不持久化 meta state / profile / enable 开关。
+- ✅ AST 边界测试：`meta_emotion.py` 只导入 stdlib + `core`。
+
+### 验证命令
+
+```bash
+cd /c/Users/Administrator/Desktop/emotion-engine
+
+python -m unittest test_l3_5_meta_emotion.py -v
+python -m unittest discover -v
+
+python scripts/generate_l1_golden.py --check
+python scripts/generate_l1_golden.py --legacy --check
+python scripts/generate_l2_golden.py --check
+python scripts/generate_l2_golden.py --legacy --check
+
+python -m unittest test_l3_atmosphere_scars.py -v
+
+uv run python engine.py
+uv run python test_iloveyou.py
+uv run python characters/furina.py
+uv run python characters/kokomi.py
+uv run python characters/columbina.py
+uv run python characters/meta_emotion_demo.py
+
+git diff --stat -- fixtures/
+git status --short
+```
 
 ### 不做
 
+- 不把 bias 应用到表达、tolerance 或下一 tick 的 appraisal；
 - 不新增基础情绪通道；
 - 不接 JEV / LLM 生成元情绪；
-- 不改 tolerance 参数；
-- 不把元情绪写进 `core.py` 的核心公式；
-- 不在 L1/L2 阶段提前实现。
+- 不改 `core.py` 公式、`Personality`、tolerance 参数或 atmosphere / scar 逻辑；
+- 不持久化 meta state、profile 或 enable 开关；
+- 不新增 golden，不重新生成 `fixtures/`；
+- 不新增 `StepTrace` phase，不增加 top-level `result["meta_emotion"]`。
 
-## 7. 开放问题
+## 7. 开放问题与 v0 结论
 
-1. `acceptance` 与 `control` 是否独立？可能高度相关，需用 golden set 检查。
-2. 元情绪是否只对“显著高于基线”的通道激活？阈值是多少？
-3. 元情绪标签用离散 `kind`，还是三维连续向量（valence / acceptance / control）？建议 v0 两者并存，离散标签用于表达，连续值用于计算。
-4. 元情绪是否影响下一 tick 的 appraisal 增益？建议先只影响表达与耐受，避免污染基础曲线。
-5. 元情绪与“伤疤”的区别：伤疤是事件记忆的放大，元情绪是对当前情绪的态度；两者可以叠加，但不能重复计负荷。
-6. 角色档案中的元情绪信念是否应由 LLM 蒸馏生成？第一版手工配置，避免不可解释。
+1. **`acceptance` 与 `control` 是否独立？**
+   v0 中 `acceptance = 0.45·control + 0.35·social + 0.20·identity`，两者同源、
+   高度相关。这足以让 trace 可读，但还不能证明它们是独立构念；若未来要把
+   `acceptance` 作为独立状态，需要先解耦公式并做对照测试。
+
+2. **元情绪是否只对“显著高于基线”的通道激活？阈值是多少？**
+   是。v0 使用双重阈值：`felt_diff ≥ 0.04` 且 `raw_excess ≥ 0.03`，
+   `activation = clamp01(felt_diff / 0.25)`。`trust` 的参考值是
+   `trust_target(love)`，其他通道用人格基线。阈值目前是工程值，未做
+   golden-set 标定。
+
+3. **离散 `kind` 还是连续向量？**
+   v0 两者并存：连续值用于 kind / action 计算与强度，离散 `kind` 用于 trace
+   与表达。`valence` 是 kind 的固定标签值，不是独立连续维度。
+
+4. **元情绪是否影响下一 tick 的 appraisal 增益？**
+   v0 明确不影响。`regulation_bias` 没有任何消费点；后续若接入，必须新增
+   开关、保持默认关闭，并重跑 golden 与 A/B。
+
+5. **元情绪与“伤疤”的区别？**
+   伤疤是事件记忆对通道的放大，元情绪是对当前情绪的再评估。v0 只读取
+   `scar_pressure` / `scar_channels` 来降低 goal、social、control；
+   `tolerance_load_bias` 尚未进入 tolerance。L5 接入时必须避免与伤疤负荷
+   重复计算。
+
+6. **角色档案是否由 LLM 蒸馏生成？**
+   v0 手工配置 profile，未接 LLM。`MetaEmotionProfile` 只是可选的稳定偏好，
+   默认中性；生成式蒸馏留到有可解释性校验之后再考虑。
+
+另外两个 v0 边界：
+
+- **profile 不是 Personality**：不写 OCEAN、不写 `baseline()`、不持久化。
+- **trace-only 是临时契约**：等 L5/L6 需要消费 bias 时，必须重新设计开关与
+  回滚路径，不能直接把当前 trace 值接到行为上。
 
 ## 8. 参考文献
 

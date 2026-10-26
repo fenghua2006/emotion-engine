@@ -651,6 +651,12 @@ class StepTrace:
     scar_shift: float = 0.0
     scar_channels: List[str] = field(default_factory=list)
     gated_written: Dict[str, float] = field(default_factory=dict)
+    # L3.5 元情绪可观测性。只在 meta 开启且 trace=True 时序列化；
+    # 这些字段只读，不参与核心计算。
+    meta_enabled: bool = False
+    meta_appraisal: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    meta_emotions: List[Dict[str, object]] = field(default_factory=list)
+    regulation_bias: Dict[str, object] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
 
     _PHASES = (
@@ -671,7 +677,7 @@ class StepTrace:
 
     def to_dict(self) -> Dict[str, object]:
         """返回可序列化副本；不暴露内部可变引用。"""
-        return {
+        data: Dict[str, object] = {
             "elapsed_minutes": round(self.elapsed_minutes, 4),
             "before": dict(self.before),
             "after_decay": dict(self.after_decay),
@@ -708,3 +714,33 @@ class StepTrace:
             "gated_written": dict(self.gated_written),
             "notes": list(self.notes),
         }
+        if self.meta_enabled:
+            bias = self.regulation_bias or {}
+            data.update({
+                "meta_enabled": True,
+                "meta_appraisal": {
+                    target: dict(values)
+                    for target, values in self.meta_appraisal.items()
+                },
+                "meta_emotions": [
+                    dict(emotion) for emotion in self.meta_emotions
+                ],
+                "regulation_bias": {
+                    "expression_gain": dict(
+                        bias.get("expression_gain", {})
+                    ),
+                    "display_rule": dict(
+                        bias.get("display_rule", {})
+                    ),
+                    "regulation_action": dict(
+                        bias.get("regulation_action", {})
+                    ),
+                    "tolerance_load_bias": bias.get(
+                        "tolerance_load_bias", 0.0,
+                    ),
+                    "reappraisal_target": list(
+                        bias.get("reappraisal_target", [])
+                    ),
+                },
+            })
+        return data

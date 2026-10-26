@@ -287,11 +287,19 @@ L3.5 的验收措辞相应改为“关闭元情绪时 L3 A/B 场景不变”，�
   下界主要防止异常快照/手动值。
 - 伤疤仍是单条最大 shift 压缩 tolerance capacity，不累加多条伤疤（保持旧语义）。
 
-## 9. 下一步
+## 9. 与 L3.5 的边界
 
-1. L3.5 元情绪：默认关闭，读取 StepTrace，只输出有界偏置；
-   关闭时 L1/L2 四套 golden 与 L3 corrected / legacy A/B 场景不变。
-2. 不在 L3.5 改写 `core.py` 公式、tolerance 参数或 Personality。
+L3.5 元情绪已完成（v0，trace-only）：
+
+- 默认关闭；关闭时 L1/L2 四套 golden 与 L3 corrected / legacy A/B 场景逐值不变。
+- 开启后只增加 `StepTrace` 的四个 meta 键，不改 atmosphere 顺序、漂移、
+  clamp 或伤疤放大逻辑。
+- 元情绪读取最终的 `atmosphere`、`scar_shift`、`scar_channels`，只做二阶评估；
+  不回写氛围或伤疤。
+- `tolerance_load_bias` 只是观测值，不进入 tolerance；L5 接入时需避免与伤疤
+  负荷重复计算。
+
+L3.5 的实现与验收见 [`META_EMOTION.md`](META_EMOTION.md)。
 
 ## 10. 相关文档
 
