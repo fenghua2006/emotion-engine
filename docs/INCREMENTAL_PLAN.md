@@ -13,8 +13,8 @@
 | **L0** | 核心提取与可观测性 | ✅ 2026-10-25 | 旧测试全过；`trace` 不改变计算 |
 | **L1** | 六条快通道 | ✅ 2026-10-26（L1.1 修复交互激活） | 46 条事件双 golden 不漂移；22 + 11 个测试通过 |
 | **L2** | trust / love / longing / guilt | ✅ 2026-10-26 | 19 条事件双 golden；32 个 L2 测试；trust 30 天不发散；guilt 门槛锁定 |
-| **L3** | 氛围与伤疤 | ⏳ | 顺序修正可 A/B；伤疤有对照 |
-| **L3.5** | 元情绪：二阶评估与调节意图 | ⏳ 设计已记录 | 不新增通道；关闭时基础曲线不变 |
+| **L3** | 氛围与伤疤 | ✅ 2026-10-26 | 顺序修正可 A/B；shock 密度非零；伤疤三通道 ≤60%；166 tests |
+| **L3.5** | 元情绪：二阶评估与调节意图 | ⏳ 设计已记录 | 不新增通道；关闭时 L1/L2 golden 与 L3 A/B 不变 |
 | **L4** | 关系域记忆 | ⏳ | 记忆不写 Personality；预算可控 |
 | **L5** | 忍耐空间 | ⏳ 已实现待校准 | 参数有 golden set 依据 |
 | **L6** | 表达 / LLM / JEV / MCP | ⏳ | 全链路可回退、可观测 |
@@ -24,7 +24,7 @@
 交付：
 
 - `core.py`：通道、`EmotionalState`、衰减、回弹、饱和、慢通道、六维评估、门控、交互矩阵。
-- `StepTrace`：`before → after_decay → after_slow_channels → after_appraisal → after_atmosphere → after_interaction → final`。
+- `StepTrace`：`before → after_decay → after_slow_channels → after_appraisal → after_interaction → after_atmosphere → final`（L3 corrected；legacy 保留 `after_appraisal → after_atmosphere → after_interaction` 旧序）。
 - `test_core_line.py`：28 个测试。
 - `engine.py`：保留组合根与旧 import 路径；`tick(trace=True)` 只增加观察数据。
 
@@ -43,12 +43,13 @@ engine.py / test_iloveyou.py / characters/*.py 全部退出码 0
 
 详细契约见 [`CORE.md`](CORE.md)。
 
-### 已知顺序问题（L0 刻意未修）
+### 已知顺序问题（L3 已修，legacy 保留）
 
-1. 氛围门控在 state 写入之后才修改 `gated`，本 tick 实际不生效。
-2. shock 密度在 shock 检测之前采样，`_recent_shocks` 长期为 0。
+1. 氛围门控原先在 state 写入之后才修改 `gated`，本 tick 实际不生效。
+2. shock 密度原先在 shock 检测之前采样，`_recent_shocks` 长期为 0。
 
-两条都记录在 `StepTrace.notes`，归 L3 修正。
+L3 默认 corrected 已修正两条；`legacy_atmosphere=True` 逐字保留旧顺序与旧 notes，
+并锁定 pre-L3 单事件精确值。详见 [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md)。
 
 ## L1：六条快通道 ✅
 
@@ -166,16 +167,56 @@ legacy 开关：
 L2 没有进入 L1 参考线；L1 的 46 条事件与两套 golden 均未改变。
 详细记录见 [`L2_SLOW_CHANNELS.md`](L2_SLOW_CHANNELS.md)。
 
-## L3：氛围与伤疤
+## L3：氛围与伤疤 ✅
 
-1. 把 atmosphere 调制移到写入 state 之前；保留兼容开关。
-2. 先检测 shock，再更新氛围；shock 密度不再恒为 0。
-3. atmosphere 限制在 `[-1, 1]`。
-4. 伤疤放大限定 sadness / fear / anger，上限 60%。
-5. 增加无伤疤 / 有伤疤对照测试。
-6. 用 `StepTrace` 记录修正前后差异。
+目标：修正 pre-L3 的两处组合根顺序问题，让 atmosphere 真正作用于当前 tick；
+锁住 shock 采样、氛围边界与伤疤放大范围。L1/L2 参考线和四套 golden 不变。
 
-验收：默认可选兼容 / 修正模式；修正版下紧绷氛围提高后续负面反应；旧测试在兼容模式下全过。
+交付：
+
+- `atmosphere.py`：纯函数模块，负责 clamp、目标氛围、单步漂移、氛围调制、
+  伤疤 shift 上限与三通道放大；不导入 engine / tolerance / memory / SQLite / 网络。
+- `engine.py`：默认 corrected 顺序；`legacy_atmosphere=True` 保留 pre-L3 行为；
+  `wake()`、`tick()` 入口与快照加载都执行 corrected clamp。
+- `core.py`：`StepTrace` 增加 `atmosphere_mode / before / applied / after /
+  shock_density / arousal / multipliers`、`scar_shift / scar_channels`、
+  `gated_written`，只观察不参与计算。
+- `test_l3_atmosphere_scars.py`：32 个测试。
+- `docs/L3_ATMOSPHERE_SCARS.md`：公式、顺序、A/B 数据、限制与“不设 L3 golden”决策。
+
+corrected 顺序：
+
+```text
+entry clamp → decay → slow growth → appraise → gate → tolerance gain
+→ scar amplification → atmosphere modulation → state write
+→ boundary penalty → interactions → shock detection
+→ shock density → atmosphere drift (next tick) → memory / Saga → tolerance
+```
+
+关键口径：
+
+- tick t 的氛围调制 tick t 的 gated；tick t 的 shock 更新 tick t+1 的氛围。
+- shock 密度分母仍为 `len(FAST_CHANNELS)` = 7（含 guilt）。
+- 伤疤只放大 sadness / fear / anger；effective shift ∈ `[0, 0.6]`，乘数 ≤1.6。
+- legacy：state 写入后漂移（空 shock、不 clamp）、晚调制 gated、两条旧 notes。
+
+验收结果：
+
+```text
+32 L3 tests, OK
+166 tests total, OK
+四套 golden 全部通过：L1 current / L1 legacy / L2 current / L2 legacy
+单次严重事件 corrected atmosphere -0.200000，shock density 0.714300（5/7）
+legacy 同事件逐值保留：atmosphere -0.3774803783593781，
+  sadness 0.6125356194066094，anger 0.5079335958919840，fear 0.6160595893163425
+紧绷 +0.6 vs 轻松 -0.6：sadness 0.729544 vs 0.524779
+```
+
+不设 L3 reference line / JSON golden：L3 是组合根顺序与控制层修正，不是新的纯通道曲线；
+做 L3Line 会复制 tolerance、memory、Saga、scar store。契约改由纯函数测试、engine A/B、
+一条 pre-L3 精确兼容值，以及 L1/L2 四套 golden 不变共同锁定。
+
+详细记录见 [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md)。
 
 ## L3.5：元情绪
 
@@ -199,7 +240,7 @@ L2 没有进入 L1 参考线；L1 的 46 条事件与两套 golden 均未改变�
 
 验收：
 
-- 关闭元情绪层时，L1/L2/L3 golden 曲线完全不变。
+- 关闭元情绪层时，L1/L2 四套 golden 不变，L3 corrected / legacy A/B 场景逐值不变。
 - 开启后基础通道值不被直接改写。
 - 连续 20 个事件无 NaN / Inf / 越界。
 - 至少一个角色 demo 退出码 0。

@@ -31,7 +31,7 @@ L2 回答四个问题：
 不包含：
 
 - tolerance / 伤疤 / 氛围 / 记忆 / Saga / LLM；
-- L3 的两个顺序问题（氛围门控写入过晚、shock 密度采样过早）；
+- L3 的两个顺序问题（氛围门控写入过晚、shock 密度采样过早；已由 L3 corrected 修复，L2 参考线不涉及）；
 - 元情绪（L3.5）；
 - 新的生产入口。`slowline.py` 只是参考线，`engine.py` 仍是组合根。
 
@@ -294,7 +294,9 @@ python -m unittest test_l2_slow_channels.py -v
 全量回归：
 
 ```text
-134 tests, OK
+134 tests, OK（L2 完成时点）
+166 tests, OK（L3 完成后）
+L1 / L2 current + legacy 四套 golden 均未改变
 ```
 
 四套 golden 全部逐位通过：
@@ -321,15 +323,17 @@ L2 没有进入 L1 参考线；L1 的 46 条事件与两套 golden 均未改变�
 
 ## 10. 下一步
 
-1. L3：修氛围门控写入过晚与 shock 密度采样过早，用 L1 / L2 golden 做前后对照。
-2. L3 修改时保持 L1 / L2 两套当前 golden 不变；旧行为由 legacy 开关保留。
-3. L3.5 元情绪默认关闭时，L1 / L2 / L3 golden 必须完全不变。
-4. 不接 JEV / LLM；不改 tolerance 参数；不动关系记忆。
+1. L3 已完成：氛围门控前移到 state 写入前，shock 密度改为检测后采样；
+   L1 / L2 四套 golden 逐位未变，旧顺序由 `legacy_atmosphere=True` 保留。
+   见 [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md)。
+2. L3.5 元情绪默认关闭时，L1 / L2 四套 golden 与 L3 corrected / legacy A/B 场景必须不变。
+3. 不接 JEV / LLM；不改 tolerance 参数；不动关系记忆。
 
 ## 11. 相关文档
 
 - [`CORE.md`](CORE.md) — L0 纯动力学与 StepTrace
 - [`L1_FAST_CHANNELS.md`](L1_FAST_CHANNELS.md) — 六条快通道与 L1.1 修复
+- [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md) — L3 氛围与伤疤
 - [`INCREMENTAL_PLAN.md`](INCREMENTAL_PLAN.md) — L0–L6 + L3.5 开发计划
 - [`META_EMOTION.md`](META_EMOTION.md) — L3.5 元情绪设计
 - [`../README.md`](../README.md) — 项目总览

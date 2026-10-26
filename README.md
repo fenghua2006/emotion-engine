@@ -15,7 +15,7 @@ Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时�
 ```
                     ┌──────────────┐
                     │   Atmosphere  │  -1 relaxed ~ +1 tense
-                    │   氛围修饰器   │  调制所有 appraisal
+                    │   氛围修饰器   │  写入前调制 gated appraisal
                     └──────┬───────┘
                            │
     ┌──────────────────────┼──────────────────────┐
@@ -108,15 +108,16 @@ result = engine.tick(Appraisal(
 ```python
 result = engine.tick(appraisal, now=now, trace=True)
 trace = result["trace"]
-# trace["before"] → trace["after_decay"] → trace["after_slow_channels"]
-# → trace["after_appraisal"] → trace["after_atmosphere"]
-# → trace["after_interaction"] → trace["final"]
+# corrected: before → after_decay → after_slow_channels → after_appraisal
+#            → after_interaction → after_atmosphere → final
+# legacy:    ... → after_appraisal → after_atmosphere
+#            → after_interaction → final
 ```
 
-- `core.py` 不导入 `engine` / `tolerance` / `memory`，可以单独测试底层曲线。
+- `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为。
-- 契约、分层规则与已知顺序问题：[`docs/CORE.md`](docs/CORE.md)。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；全量 166 tests。
+- 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - L0–L6 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
 
@@ -126,7 +127,7 @@ trace = result["trace"]
 
 - 46 条冻结事件：角色 31 + engine demo 3 + 合成边界 12。
 - 双 golden：`fixtures/l1_golden.json`（当前）+ `l1_golden_legacy.json`（v0.7 对照），误差 < `1e-9`。
-- 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 **134 tests, OK**。
+- 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 **166 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -140,7 +141,7 @@ trace = result["trace"]
 
 - 19 条冻结事件，覆盖关系正负事件、guilt 门槛、越界、离线 2h / 24h / 8d / 30d。
 - 双 golden：`fixtures/l2_golden.json`（当前）+ `l2_golden_legacy.json`（旧慢通道 + 绝对阈值交互）。
-- 32 个 L2 测试；全量 **134 tests, OK**；四套 golden 误差 < `1e-9`。
+- 32 个 L2 测试；L2 完成时全量 134 tests；四套 golden 误差 < `1e-9`。
 - **交互基线**：trust 用 `trust_target(love)`，love / 六快通道 / guilt 用人格基线。原因是正常关系里的 trust 会长到目标；若把人格局限当成“额外信任”，空闲 tick 会持续压 fear（实测 300 tick 将 fear 从 0.105 拉到 0.0）。
 - **guilt 门槛**：`self_agency ≤ 0.3` 严格为 0，超过后平滑放大；纯外部归因不产生愧疚。
 - **正面事件**：love 只吃本区间新增事件，不再用累计值；30 天模拟 trust 收敛到 `trust_target(love)`，不撞 1.0 上限。
@@ -149,6 +150,33 @@ trace = result["trace"]
 - 生成 / 校验：`python scripts/generate_l2_golden.py [--check] [--legacy]`。
 - 详细记录：[`docs/L2_SLOW_CHANNELS.md`](docs/L2_SLOW_CHANNELS.md)。
 - 测试：`python -m unittest test_l2_slow_channels.py -v`。
+
+## L3 氛围与伤疤（已完成）
+
+L3 修正了 L0 留下的两处组合根顺序问题，并锁住伤疤的安全边界。默认 `corrected`；
+`EmotionEngine(legacy_atmosphere=True)` 逐字保留 pre-L3 顺序和旧 trace notes。
+
+corrected 顺序：
+
+```text
+appraise → gate → tolerance gain → scar amplification
+→ atmosphere modulation → state write → boundary → interactions
+→ shock detection → shock density → atmosphere drift（下一 tick 生效）
+```
+
+- **氛围前移**：tick t 的 atmosphere 在 state 写入前调制 joy / sadness / fear / anger；
+  tick t 检测到的 shock 更新 tick t+1 的氛围。
+- **shock 密度**：先检测 shock，再采样 `len(shock_channels) / len(FAST_CHANNELS)`；
+  `_recent_shocks` 不再恒为 0。
+- **有界**：corrected atmosphere ∈ `[-1, 1]`，单 tick 漂移 ≤0.1；`wake()` 和快照加载也 clamp。
+- **伤疤**：只放大 sadness / fear / anger；effective shift ≤0.6，最大乘数 1.6；
+  正面事件与 `goal_conducibility ≥ 0` 不放大。
+- 32 个 L3 测试：氛围数学 7、伤疤数学 7、顺序 A/B 9、伤疤对照 3、快照 4、模块边界 2；
+  全量 **166 tests, OK**；L1/L2 四套 golden 逐位未变。
+- 单次严重事件：corrected atmosphere `-0.200000`、shock density `0.714300`（5/7）；
+  legacy 精确保留 `-0.3774803783593781`。
+- 详细公式、A/B 数据与“为什么不设 L3 golden”：[`docs/L3_ATMOSPHERE_SCARS.md`](docs/L3_ATMOSPHERE_SCARS.md)。
+- 测试：`python -m unittest test_l3_atmosphere_scars.py -v`。
 
 ## 元情绪（L3.5，设计已记录）
 

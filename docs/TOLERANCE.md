@@ -182,13 +182,16 @@ print(result["tolerance"])
 `save_snapshot()` / `load_snapshot()` 现在会保存并恢复：
 
 - 10 通道状态与 `atmosphere`
+- `legacy_atmosphere`（L3 顺序模式）
 - `tolerance`（load / capacity / zone / hysteresis）
 - `events_today` / `positive_events`
 - `_last_saga` / `_recent_shocks`
 - 快照时间（作为恢复后的计时起点）
 - 旧伤疤
 
-旧版“只存通道字典”的快照仍可读取。
+旧版“只存通道字典”的快照仍可读取。L3 corrected 模式在加载和 `wake()` 入口
+都会把 atmosphere clamp 到 `[-1, 1]`；legacy 模式保持旧值不 clamp。tolerance 参数
+和 load / capacity 公式未因 L3 改变。
 
 ## 7. 与表达层
 

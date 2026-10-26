@@ -27,7 +27,7 @@ L1 只回答一个问题：
 - trust / love / longing / guilt 的动力学；
 - slow → fast 交互（trust→fear、love+fear 等），留给 L2；
 - tolerance / 伤疤 / 氛围 / 记忆 / Saga / LLM；
-- 生产引擎的组合顺序问题（属于 L3）。
+- 生产引擎的组合顺序问题（已由 L3 corrected 修复，L1 参考线不涉及）。
 
 `trust = love = 0.5` 只作为 `gate_appraisal()` 的固定参数；交互前会把
 trust / love / guilt 临时置零，避免慢通道数值影响 L1 曲线。
@@ -191,7 +191,9 @@ python -m unittest test_interaction_activation.py -v
 全量回归：
 
 ```text
-102 tests, OK
+102 tests, OK（L1.1 时点）
+166 tests, OK（L2 + L3 完成后）
+L1 current / legacy golden 均未改变
 ```
 
 L1.1 修改了 `core.apply_interactions()` 的**触发语义**，但没有改任何交互权重；
@@ -200,13 +202,14 @@ L1.1 修改了 `core.apply_interactions()` 的**触发语义**，但没有改任
 ## 7. 下一步
 
 1. L2 已完成：trust 用 `trust_target(love)` 作交互基线，love / 快通道 / guilt 用人格基线；见 [`L2_SLOW_CHANNELS.md`](L2_SLOW_CHANNELS.md)。
-2. L3 修氛围 / shock 顺序问题时，用 L1 golden 做“基础曲线不变”对照。
+2. L3 已完成：修正氛围 / shock 顺序时，L1 双 golden 逐位未变；见 [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md)。
 3. L3.5 元情绪默认关闭时，L1 golden 必须完全不变。
 
 ## 8. 相关文档
 
 - [`CORE.md`](CORE.md) — L0 纯动力学与 StepTrace
 - [`L2_SLOW_CHANNELS.md`](L2_SLOW_CHANNELS.md) — L2 慢通道与 slow → fast 基线
+- [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md) — L3 氛围与伤疤
 - [`INCREMENTAL_PLAN.md`](INCREMENTAL_PLAN.md) — L0–L6 + L3.5 开发计划
 - [`META_EMOTION.md`](META_EMOTION.md) — L3.5 元情绪设计
 - [`../README.md`](../README.md) — 项目总览

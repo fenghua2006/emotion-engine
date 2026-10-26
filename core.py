@@ -640,6 +640,17 @@ class StepTrace:
     # interaction 阶段使用的 trust 关系均衡线。
     slow_positive_input: int = 0
     trust_target: Optional[float] = None
+    # L3 氛围 / 伤疤可观测性。字段只记录，不参与计算。
+    atmosphere_mode: str = "legacy"
+    atmosphere_before: float = 0.0
+    atmosphere_applied: float = 0.0
+    atmosphere_after: float = 0.0
+    atmosphere_shock_density: float = 0.0
+    atmosphere_arousal: float = 0.0
+    atmosphere_multipliers: Dict[str, float] = field(default_factory=dict)
+    scar_shift: float = 0.0
+    scar_channels: List[str] = field(default_factory=list)
+    gated_written: Dict[str, float] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
 
     _PHASES = (
@@ -680,5 +691,20 @@ class StepTrace:
                 round(self.trust_target, 4)
                 if self.trust_target is not None else None
             ),
+            "atmosphere_mode": self.atmosphere_mode,
+            "atmosphere_before": round(self.atmosphere_before, 4),
+            "atmosphere_applied": round(self.atmosphere_applied, 4),
+            "atmosphere_after": round(self.atmosphere_after, 4),
+            "atmosphere_shock_density": round(
+                self.atmosphere_shock_density, 4,
+            ),
+            "atmosphere_arousal": round(self.atmosphere_arousal, 4),
+            "atmosphere_multipliers": {
+                key: round(value, 4)
+                for key, value in self.atmosphere_multipliers.items()
+            },
+            "scar_shift": round(self.scar_shift, 4),
+            "scar_channels": list(self.scar_channels),
+            "gated_written": dict(self.gated_written),
             "notes": list(self.notes),
         }

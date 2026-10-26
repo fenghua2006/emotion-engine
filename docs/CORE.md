@@ -39,10 +39,13 @@ L0 core.py         纯公式：通道 / 衰减 / 评估 / 门控 / 交互 / 慢�
 ### `core.py` 不可以依赖
 
 - `engine.py`
+- `atmosphere.py`
 - `tolerance.py`
 - `memory.py`
 - `dashboard/`
 - 任何 LLM / 网络 / SQLite
+
+`atmosphere.py` 只依赖 `core.Channel` 与标准库，不反向依赖 `engine.py`。
 
 ### 上层规则
 
@@ -102,7 +105,23 @@ trace = result["trace"]
 | `slow_positive_input` | 本 tick 喂给 love 的正面事件增量（当前 0/1；legacy 为累计值） |
 | `trust_target` | 交互阶段使用的 `trust_target(love)` 关系均衡线 |
 | `atmosphere` / `tolerance_zone` | 本 tick 结束时的控制层状态 |
-| `notes` | 已知顺序问题、时钟回拨等诊断信息 |
+| `notes` | 顺序模式、时钟回拨等诊断信息 |
+| `atmosphere_mode` | `corrected` / `legacy` |
+| `atmosphere_before` | tick 入口氛围（corrected 已 clamp） |
+| `atmosphere_applied` | 本 tick 实际用于 gated 的氛围 |
+| `atmosphere_after` | tick 结束存储的氛围 |
+| `atmosphere_shock_density` | 本 tick 漂移使用的 shock 窗口密度 |
+| `atmosphere_arousal` | 目标使用的 `(fear + sadness) / 2` |
+| `atmosphere_multipliers` | 氛围对各通道的实际乘数 |
+| `scar_shift` | 实际生效的伤疤 shift（0 ~ 0.6） |
+| `scar_channels` | 被伤疤放大的通道 |
+| `gated_written` | 真正写入 state 的 gated |
+
+L3 字段只观察，不参与计算。相位顺序：
+
+- corrected：`after_appraisal`（含氛围调制）→ `after_interaction` → shock →
+  氛围漂移 → `after_atmosphere` → `final`；
+- legacy：`after_appraisal` → `after_atmosphere` → `after_interaction` → shock → `final`。
 
 `StepTrace` 只观察，不参与计算；`mark()` 会复制状态，后续修改不会污染快照。
 
@@ -114,8 +133,8 @@ trace = result["trace"]
 python -m unittest test_core_line.py test_tolerance.py \
   test_engine_tolerance.py test_memory_system.py \
   test_l1_fast_channels.py test_interaction_activation.py \
-  test_l2_slow_channels.py -v
-# 134 tests, OK
+  test_l2_slow_channels.py test_l3_atmosphere_scars.py -v
+# 166 tests, OK（含 32 个 L3 测试）
 ```
 
 另外验证了：
@@ -130,28 +149,34 @@ python characters/columbina.py
 
 全部退出码 0。`test_trace_does_not_change_engine_result` 直接比较 `trace=False` 与 `trace=True` 的完整输出和最终状态。
 
-## 6. L0 发现的两个顺序问题
+## 6. L0 发现的两个顺序问题（L3 已修）
 
-L0 刻意**不修**这两个问题，以保持行为不变；它们记录在 `StepTrace.notes` 中，留给 L3 修正。
+L0 刻意不修，以保持行为不变；L3 默认 corrected 修正两条，`legacy_atmosphere=True`
+逐字保留旧路径与旧 notes。完整契约见 [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md)。
 
-### 6.1 氛围门控写在状态更新之后
+### 6.1 氛围门控写在状态更新之后 → corrected 前移
 
-`tick()` 先在第 3 步把 `gated` 写入通道，再在第 4 步根据 atmosphere 修改 `gated`。  
-因此氛围对“负面放大 / 喜悦打折”的调制只改了输出里的 `gated_appraisal`，没有改变本 tick 的通道值。
+旧路径先写通道，再用 atmosphere 修改 `gated`；调制只影响输出/快照，不改变本 tick 通道。
 
-影响：
+corrected：
 
-- atmosphere 目前主要通过 `tolerance.capacity` 间接影响下一 tick；
-- 输出中的 `gated_appraisal` 不是实际写入状态的那一版。
+```text
+appraise → gate → tolerance gain → scar → atmosphere modulation → state write
+```
 
-修正方向（L3）：把 atmosphere 调制移到写入 state 之前；用 `trace` 对比修正前后曲线。
+tick t 的 shock 更新氛围，从 tick t+1 开始调制 gated；避免同 tick 循环依赖。
+`gated_written` 直接暴露真正写入 state 的值。
 
-### 6.2 shock 密度在 shock 检测之前采样
+legacy：保留晚调制，`gated_appraisal` 仍是晚调制后的输出，二者差异可见。
 
-第 4 步计算 `recent_shock_intensity = len(shock_channels) / len(FAST_CHANNELS)` 时，`shock_channels` 还是空列表；真正的 shock 检测在第 5 步。  
-因此 `_recent_shocks` 每 tick 记录的都是 0，氛围里的 `shock_density` 实际没有生效。
+### 6.2 shock 密度在 shock 检测之前采样 → corrected 后移
 
-修正方向（L3）：先检测 shock，再更新氛围；或者把上一 tick 的 shock 列表显式传入氛围层。
+旧路径在 shock 检测前计算 `len(shock_channels) / len(FAST_CHANNELS)`，密度恒为 0。
+
+corrected：先检测 shock，追加真实强度到 `_recent_shocks`（window 5），
+再计算密度并漂移氛围；氛围 clamp 到 `[-1, 1]`，单 tick 漂移 ≤0.1。
+
+legacy：仍在检测前追加 0.0，不 clamp，旧行为精确保留。
 
 ### 6.3 L1.1 已修：交互矩阵把基线当成激活
 

@@ -42,6 +42,14 @@ L2 慢通道语义（2026/10/26）:
   - legacy_slow_channels=True 保留旧 guilt / 累计正面事件 / trust 基线行为
   - 详细记录见 docs/L2_SLOW_CHANNELS.md
 
+L3 氛围与伤疤（2026/10/26）:
+  - 氛围调制移到 state 写入之前，本 tick 的 gated 真正受氛围影响
+  - 先检测 shock，再用非零 shock 密度更新氛围；新氛围作用于下一 tick
+  - atmosphere 在 corrected 模式限制在 [-1, 1]
+  - 伤疤只放大 sadness / fear / anger，effective shift 上限 0.6
+  - legacy_atmosphere=True 保留 pre-L3 的顺序、零密度、无 clamp 与旧 notes
+  - 详细记录见 docs/L3_ATMOSPHERE_SCARS.md
+
 v0.3 核心变更:
   - 记忆-情绪耦合: Arousal 驱动存储 + 30min 固化窗口 + 三级记忆
   - Saga 效应: 长期记忆持续微拉基线（每 24h tick 调用一次）
@@ -67,6 +75,15 @@ from tolerance import (
     ZONE_HYPER,
     ZONE_HYPO,
     ToleranceState,
+)
+
+from atmosphere import (
+    MAX_SCAR_SHIFT,
+    apply_atmosphere_modulation,
+    apply_scar_amplification,
+    clamp_atmosphere,
+    clamp_scar_shift,
+    drift_atmosphere,
 )
 
 
@@ -123,11 +140,15 @@ class EmotionEngine:
     #   - trust 的正向交互不设 trust_target 上限
     # 用于信任/爱意长程曲线的前后对照。
     legacy_slow_channels: bool = False
+    # L3: False = 修正后的氛围顺序 / 非零 shock 密度 / [-1,1] clamp；
+    # True = 复现 pre-L3 的晚调制、零密度、无 clamp 与旧 trace notes。
+    legacy_atmosphere: bool = False
 
     def _scar_pressure(self) -> float:
         """旧伤疤对耐受窗的压缩程度。取最强的一条，不累加。"""
         strongest = max(
-            (pattern.threshold_shift for pattern in self.scars.patterns.values()),
+            (clamp_scar_shift(pattern.threshold_shift)
+             for pattern in self.scars.patterns.values()),
             default=0.0,
         )
         return max(0.0, min(1.0, strongest))
@@ -160,6 +181,8 @@ class EmotionEngine:
         now 可注入，便于离线结算的确定性测试。
         """
         now = time.time() if now is None else now
+        if not self.legacy_atmosphere:
+            self.atmosphere = clamp_atmosphere(self.atmosphere)
         offline_minutes = (now - self.state._last_update) / 60.0
         if offline_minutes < 1:
             return {"offline_minutes": 0, "message": "barely slept"}
@@ -231,10 +254,19 @@ class EmotionEngine:
                 bl = self.personality.baseline()
                 setattr(self.state, ch.value, bl[ch])
 
+        # L3: corrected 模式在入口先收束氛围，避免异常快照/手动值越界。
+        if not self.legacy_atmosphere:
+            self.atmosphere = clamp_atmosphere(self.atmosphere)
+        atmosphere_before = self.atmosphere
+
         trace_data: Optional[StepTrace] = None
         if trace:
             trace_data = StepTrace(elapsed_minutes=elapsed_minutes)
             trace_data.mark("before", self.state)
+            trace_data.atmosphere_mode = (
+                "legacy" if self.legacy_atmosphere else "corrected"
+            )
+            trace_data.atmosphere_before = atmosphere_before
             if raw_elapsed_minutes < 0:
                 trace_data.notes.append("clock_went_backwards: elapsed clamped to 0")
 
@@ -288,6 +320,14 @@ class EmotionEngine:
         raw = {}
         gated = {}
         shock_channels = []
+        gated_written: Dict[Channel, float] = {}
+        scar_shift = 0.0
+        scar_channels: List[str] = []
+        atmosphere_applied = 0.0
+        atmosphere_multipliers: Dict[str, float] = {}
+        shock_density = 0.0
+        atmosphere_arousal = 0.0
+
         if appraisal is not None:
             raw = appraise(
                 appraisal,
@@ -306,12 +346,14 @@ class EmotionEngine:
                     if ch in gated and gated[ch] > 0.001:
                         gated[ch] *= negative_gain
 
-            # Step 3.5: 触发敏感化——旧伤疤放大负面情绪
-            scar_shift = self.scars.get_shift(appraisal)
-            if scar_shift > 0.01 and appraisal.goal_conduciveness < 0:
-                for ch in (Channel.SADNESS, Channel.FEAR, Channel.ANGER):
-                    if ch in gated and gated[ch] > 0.001:
-                        gated[ch] *= (1.0 + scar_shift)  # 旧伤疤让负面放大 0~60%
+            # Step 3.5: 触发敏感化——旧伤疤放大负面情绪。
+            # L3: 纯函数统一限制通道与 60% 上限。
+            raw_scar_shift = self.scars.get_shift(appraisal)
+            gated, effective_scar, scar_channels = apply_scar_amplification(
+                gated, raw_scar_shift, appraisal.goal_conduciveness,
+            )
+            if scar_channels:
+                scar_shift = effective_scar
 
             # 登记触发 / 正面反例
             tag = self.scars.detect(appraisal)
@@ -319,6 +361,17 @@ class EmotionEngine:
                 self.scars.register(tag, now)
             elif tag and appraisal.goal_conduciveness > 0:
                 self.scars.register_positive(tag)
+
+            # L3 corrected: 氛围在写入 state 之前调制 gated。
+            # legacy 仍在写入之后调制，以复现旧行为。
+            if not self.legacy_atmosphere:
+                gated, atmosphere_multipliers = apply_atmosphere_modulation(
+                    gated, atmosphere_before,
+                )
+                atmosphere_applied = atmosphere_before
+
+            # 记录真正写入 state 的 gated（legacy 下这是晚调制前的版本）。
+            gated_written = dict(gated)
 
             for ch in FAST_CHANNELS:
                 if ch in gated and gated[ch] > 0.001:
@@ -340,56 +393,67 @@ class EmotionEngine:
         if trace_data:
             trace_data.mark("after_appraisal", self.state)
 
-        # Step 4: 氛围更新 + 调制
-        # 氛围基于最近 shock 密度和当前 arousal 漂移
-        recent_shock_intensity = len(shock_channels) / max(1, len(FAST_CHANNELS))
-        self._recent_shocks.append(recent_shock_intensity)
-        if len(self._recent_shocks) > 5:
-            self._recent_shocks.pop(0)
+        # 氛围目标使用的唤醒度：state 写入后、interactions 前捕获。
+        # 这样 corrected 相对 legacy 的差异只来自 shock 密度本身。
+        atmosphere_arousal = (self.state.fear + self.state.sadness) / 2.0
 
-        # shock 密度高 + 当前 fear/sadness 高 → 变紧绷
-        shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
-        arousal_trend = (self.state.fear + self.state.sadness) / 2
-        target = -0.6 + shock_density * 1.2 + arousal_trend * 0.4
-        # 越界 → 氛围直接推向紧绷
-        if boundary_violation:
-            target += 0.3
-        self.atmosphere += max(-0.1, min(0.1, target - self.atmosphere))
+        if self.legacy_atmosphere:
+            # ── pre-L3 兼容路径：先漂移，再晚调制 gated ──
+            # 此时 shock 尚未检测，shock_channels 仍为空，密度恒为 0。
+            recent_shock_intensity = len(shock_channels) / max(
+                1, len(FAST_CHANNELS),
+            )
+            self._recent_shocks.append(recent_shock_intensity)
+            if len(self._recent_shocks) > 5:
+                self._recent_shocks.pop(0)
 
-        # 氛围调制 gate：紧绷放大负面，轻松缓冲负面
-        # atmosphere > 0: 负面放大, 正面削弱；< 0: 反之
-        if self.atmosphere > 0 and appraisal is not None:
-            for ch in FAST_CHANNELS:
-                if ch in gated and gated[ch] > 0.001:
-                    ch_name = ch.value
-                    if ch_name in ("joy",):
-                        gated[ch] *= (1.0 - self.atmosphere * 0.3)  # 紧绷时喜悦打折
-                    elif ch_name in ("sadness", "fear", "anger"):
-                        gated[ch] *= (1.0 + self.atmosphere * 0.4)  # 紧绷时负面放大
-        elif self.atmosphere < 0 and appraisal is not None:
-            for ch in FAST_CHANNELS:
-                if ch in gated and gated[ch] > 0.001:
-                    ch_name = ch.value
-                    if ch_name in ("sadness", "fear", "anger"):
-                        gated[ch] *= (1.0 + self.atmosphere * 0.3)  # 轻松时负面缓冲
-                    elif ch_name in ("joy",):
-                        gated[ch] *= (1.0 - self.atmosphere * 0.2)  # 轻松时喜悦放大
+            shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
+            self.atmosphere = drift_atmosphere(
+                self.atmosphere,
+                shock_density=shock_density,
+                arousal=atmosphere_arousal,
+                boundary_violation=boundary_violation,
+                clamp=False,
+            )
 
-        # 越界惩罚：低信任时被越界称呼 → trust 降 + disgust 已由 gate 处理
-        if boundary_violation and self.state.trust < 0.5:
-            self.state.trust = max(0.01, self.state.trust - (0.5 - self.state.trust) * 0.3)
+            # 旧版晚调制：写入 state 后只影响输出/快照。
+            if appraisal is not None:
+                gated, atmosphere_multipliers = apply_atmosphere_modulation(
+                    gated, self.atmosphere,
+                )
+                atmosphere_applied = self.atmosphere
+
+            # 越界惩罚：低信任时被越界称呼 → trust 降
+            if boundary_violation and self.state.trust < 0.5:
+                self.state.trust = max(
+                    0.01,
+                    self.state.trust - (0.5 - self.state.trust) * 0.3,
+                )
+
+            if trace_data:
+                trace_data.mark("after_atmosphere", self.state)
+                if appraisal is not None and abs(self.atmosphere) > 1e-9:
+                    trace_data.notes.append(
+                        "atmosphere gate mutates gated after state write "
+                        "(preserved L0 behavior)"
+                    )
+        else:
+            # ── L3 corrected：越界惩罚在 interactions 前；氛围在 shock 后更新 ──
+            if boundary_violation and self.state.trust < 0.5:
+                self.state.trust = max(
+                    0.01,
+                    self.state.trust - (0.5 - self.state.trust) * 0.3,
+                )
 
         if trace_data:
             trace_data.raw_appraisal = {k.value: v for k, v in raw.items()}
             trace_data.gated_appraisal = {k.value: v for k, v in gated.items()}
-            trace_data.mark("after_atmosphere", self.state)
-            # L0 行为保持：氛围对 gated 的调制发生在写入 state 之后，
-            # 因此当前只影响输出/快照，不改变本 tick 的通道值。
-            if appraisal is not None and abs(self.atmosphere) > 1e-9:
-                trace_data.notes.append(
-                    "atmosphere gate mutates gated after state write "
-                    "(preserved L0 behavior)"
-                )
+            trace_data.gated_written = {
+                k.value: v for k, v in gated_written.items()
+            }
+            trace_data.scar_shift = scar_shift
+            trace_data.scar_channels = list(scar_channels)
+            trace_data.atmosphere_multipliers = dict(atmosphere_multipliers)
 
         # Step 5: 交互矩阵（负性交互强度受耐受窗调制）
         # L1.1: 默认只让“高于人格基线”的激活参与交互，避免基线本身
@@ -421,15 +485,47 @@ class EmotionEngine:
             if shock > threshold:
                 shock_channels.append(ch.value)
 
-        if trace_data:
-            trace_data.shock_channels = list(shock_channels)
-            trace_data.blends = list(blends)
-            # 氛围在 Step 4 采样 shock_channels 时，列表还没被 Step 5 填充，
-            # 所以 shock 密度总是看到 0。记录该顺序，便于 L1 修正时对照。
-            trace_data.notes.append(
-                "shock density sampled before shock detection "
-                "(preserved L0 behavior)"
+        if self.legacy_atmosphere:
+            if trace_data:
+                trace_data.shock_channels = list(shock_channels)
+                trace_data.blends = list(blends)
+                # pre-L3：氛围在本轮 shock 检测前采样，密度恒为 0。
+                trace_data.notes.append(
+                    "shock density sampled before shock detection "
+                    "(preserved L0 behavior)"
+                )
+        else:
+            # L3 corrected：先检测 shock，再用本 tick 密度漂移氛围。
+            # 新氛围作用于下一 tick 的 gated；避免同 tick 循环依赖。
+            recent_shock_intensity = len(shock_channels) / max(
+                1, len(FAST_CHANNELS),
             )
+            self._recent_shocks.append(recent_shock_intensity)
+            if len(self._recent_shocks) > 5:
+                self._recent_shocks.pop(0)
+
+            shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
+            self.atmosphere = drift_atmosphere(
+                self.atmosphere,
+                shock_density=shock_density,
+                arousal=atmosphere_arousal,
+                boundary_violation=boundary_violation,
+                clamp=True,
+            )
+
+            if trace_data:
+                trace_data.shock_channels = list(shock_channels)
+                trace_data.blends = list(blends)
+                trace_data.mark("after_atmosphere", self.state)
+                trace_data.notes.append(
+                    "L3 corrected: shock detected before atmosphere update; "
+                    "density applies next tick"
+                )
+                if (appraisal is not None
+                        and abs(atmosphere_applied) > 1e-9):
+                    trace_data.notes.append(
+                        "L3 corrected: atmosphere gate applied before state write"
+                    )
 
         # Step 6: 记忆存储 + 固化（带 novelty gate）
         if appraisal is not None:
@@ -487,6 +583,10 @@ class EmotionEngine:
         if trace_data:
             trace_data.mark("final", self.state)
             trace_data.atmosphere = self.atmosphere
+            trace_data.atmosphere_after = self.atmosphere
+            trace_data.atmosphere_applied = atmosphere_applied
+            trace_data.atmosphere_shock_density = shock_density
+            trace_data.atmosphere_arousal = atmosphere_arousal
             trace_data.tolerance_zone = self.tolerance.zone
 
         # 输出
@@ -566,7 +666,9 @@ class SensitizationStore:
         # Kindling: 第 3 次开始降门槛，之后每次再降
         if p.trigger_count >= 3:
             excess = p.trigger_count - 2
-            p.threshold_shift = min(0.6, excess * 0.08)  # 单次门槛降 8%, 最大降 60%
+            p.threshold_shift = min(
+                MAX_SCAR_SHIFT, excess * 0.08,
+            )  # 单次门槛降 8%, 最大降 60%
 
     def register_positive(self, tag: str):
         """正面反例——修复进程。5 次正面抵消 1 次负面 (5:1 贝叶斯权重)"""
@@ -584,7 +686,7 @@ class SensitizationStore:
         """
         tag = self.detect(appraisal)
         if tag and tag in self.patterns:
-            return self.patterns[tag].threshold_shift
+            return clamp_scar_shift(self.patterns[tag].threshold_shift)
         return 0.0
 
     def all_scars(self) -> Dict[str, float]:
@@ -667,6 +769,7 @@ def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH,
             "recent_shocks": list(engine._recent_shocks),
             "legacy_interactions": engine.legacy_interactions,
             "legacy_slow_channels": engine.legacy_slow_channels,
+            "legacy_atmosphere": engine.legacy_atmosphere,
         }
         db.execute(
             "INSERT INTO snapshots (state_json, atmosphere, saved_at) VALUES (?,?,?)",
@@ -713,8 +816,6 @@ def load_snapshot(engine: "EmotionEngine", path: str = DB_PATH) -> bool:
                 setattr(engine.state, ch.value, float(state_data[ch.value]))
 
         snapshot_atmosphere = data.get("atmosphere", row[1])
-        if snapshot_atmosphere is not None:
-            engine.atmosphere = float(snapshot_atmosphere)
 
         if "tolerance" in data:
             engine.tolerance = ToleranceState.from_dict(data.get("tolerance"))
@@ -732,6 +833,14 @@ def load_snapshot(engine: "EmotionEngine", path: str = DB_PATH) -> bool:
             engine.legacy_interactions = bool(data.get("legacy_interactions"))
         if "legacy_slow_channels" in data:
             engine.legacy_slow_channels = bool(data.get("legacy_slow_channels"))
+        if "legacy_atmosphere" in data:
+            engine.legacy_atmosphere = bool(data.get("legacy_atmosphere"))
+
+        # 先恢复 flag，再决定是否 clamp，避免 legacy 模式被悄悄改写。
+        if snapshot_atmosphere is not None:
+            engine.atmosphere = float(snapshot_atmosphere)
+        if not engine.legacy_atmosphere:
+            engine.atmosphere = clamp_atmosphere(engine.atmosphere)
 
         # 以快照时间作为计时起点，避免恢复后把停机时间误算成在线时间。
         if row[2] is not None:

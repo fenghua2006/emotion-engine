@@ -39,7 +39,7 @@ from engine import (
 )
 
 
-def make_engine(**personality):
+def make_engine(*, legacy_atmosphere=False, **personality):
     pers = Personality(**personality)
     state = EmotionalState()
     for channel, value in pers.baseline().items():
@@ -49,6 +49,7 @@ def make_engine(**personality):
         personality=pers,
         memory=MemoryStore(),
         scars=SensitizationStore(),
+        legacy_atmosphere=legacy_atmosphere,
     )
 
 
@@ -246,10 +247,10 @@ class StepTraceTests(unittest.TestCase):
         self.assertIn("tolerance_zone", trace)
         self.assertEqual(trace["final"], result["state"])
 
-    def test_trace_exposes_known_l0_ordering_risks(self):
-        # 这两条是 L0 刻意保持的现有行为，不是设计目标。
-        # L1 修正顺序后，应同步删除此断言并替换为回归测试。
-        engine = make_engine()
+    def test_legacy_trace_preserves_pre_l3_ordering_risks(self):
+        # L3 已修正默认顺序；legacy_atmosphere=True 保留旧诊断信息，
+        # 用于 pre-L3 曲线对照。
+        engine = make_engine(legacy_atmosphere=True)
         result = engine.tick(
             bad_event(),
             now=engine.state._last_update + 60,
@@ -258,6 +259,7 @@ class StepTraceTests(unittest.TestCase):
         notes = " ".join(result["trace"]["notes"])
         self.assertIn("atmosphere gate mutates gated after state write", notes)
         self.assertIn("shock density sampled before shock detection", notes)
+        self.assertEqual(result["trace"]["atmosphere_mode"], "legacy")
 
     def test_clock_backwards_is_clamped_and_recorded(self):
         engine = make_engine()

@@ -59,7 +59,7 @@
 - `engine.py` 保留组合根与旧 import 路径
 - `tick(trace=True)` 返回 `StepTrace` 分阶段快照，不改变计算
 - 28 个 core 测试；旧 41 个测试全部通过（合计 69）
-- 记录两个待修顺序问题：氛围门控写入过晚、shock 密度采样过早
+- 记录两个顺序问题：氛围门控写入过晚、shock 密度采样过早（L3 已修，legacy 保留）
 - 详细契约见 `docs/CORE.md`；完整 L0–L6 安排见 `docs/INCREMENTAL_PLAN.md`
 
 ## 增量开发 L1 ✅ — 六条快通道
@@ -87,12 +87,23 @@
 - `legacy_slow_channels` + `legacy_interactions` 保留旧曲线
 - 详细设计见 `docs/L2_SLOW_CHANNELS.md`
 
-## 增量开发 L3.5 — 元情绪（设计已记录）
+## 增量开发 L3 ✅ — 氛围与伤疤
+- 新增 `atmosphere.py`：目标氛围、单步漂移、clamp、氛围调制、伤疤放大上限
+- 默认 corrected：氛围在 state 写入前调制 gated；shock 检测后再采样密度，下一 tick 生效
+- corrected atmosphere ∈ `[-1, 1]`；伤疤只放大 sadness / fear / anger，≤60%
+- `legacy_atmosphere=True` 逐字保留 pre-L3 顺序、零密度与旧 trace notes
+- `StepTrace` 增加 atmosphere / scar / gated_written 观测字段
+- 32 个 L3 测试；全量 166 tests OK；L1/L2 四套 golden 逐位未变
+- 单次严重事件：corrected atmosphere -0.200000 / density 0.714300；legacy 精确兼容
+- 不设 L3 golden；契约由纯函数测试 + A/B + 一条 pre-L3 精确值锁定
+- 详细设计见 `docs/L3_ATMOSPHERE_SCARS.md`
+
+## 增量开发 L3.5 — 元情绪（设计已记录，下一层）
 - 元情绪是二阶过程，不是第 11 个基础通道
 - `target` 指向 primary channel；`kind`：shame / guilt / pride / contempt / compassion / interest / fear
 - 元评估四维：goal / social / control / identity
 - 只输出表达、调节、耐受的有界偏置；不改 `core.py`，不写 `Personality`
-- 关闭时 L1/L2/L3 曲线完全不变；默认开关关闭
+- 关闭时 L1/L2 四套 golden 不变、L3 corrected / legacy A/B 场景逐值不变；默认开关关闭
 - 设计根因、文献与验收见 `docs/META_EMOTION.md`
 
 ## v0.7 — MCP 封装（进行中）

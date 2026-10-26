@@ -35,6 +35,10 @@ python -m unittest test_core_line.py test_tolerance.py test_engine_tolerance.py 
 python -m unittest test_memory_system.py -v
 python -m unittest test_l1_fast_channels.py test_interaction_activation.py -v
 python -m unittest test_l2_slow_channels.py -v
+python -m unittest test_l3_atmosphere_scars.py -v
+
+# Full suite (166 tests)
+python -m unittest discover
 
 # L1 golden generation / verification
 python scripts/generate_l1_golden.py                    # current behavior
@@ -65,13 +69,13 @@ uv run python C:\Users\Administrator\Desktop\furina_fresh.py    # Baseline + sce
 
 ## Architecture
 
-Core dynamics: `core.py` (no memory/tolerance/LLM imports). Composition root: `engine.py` (~1,450 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
+Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Composition root: `engine.py` (~1,450 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
 
 ### L0 boundary
 
-`core.py` owns channels, `EmotionalState`, decay, appraisal, gating, interaction matrix, slow-channel growth, and `StepTrace`. It must not import `engine`, `tolerance`, `memory`, SQLite, or network code. `engine.py` re-exports the old names so existing imports keep working.
+`core.py` owns channels, `EmotionalState`, decay, appraisal, gating, interaction matrix, slow-channel growth, and `StepTrace`. It must not import `engine`, `atmosphere`, `tolerance`, `memory`, SQLite, or network code. `engine.py` re-exports the old names so existing imports keep working.
 
-`tick(..., trace=True)` adds `result["trace"]` with phase snapshots (`before`, `after_decay`, `after_slow_channels`, `after_appraisal`, `after_atmosphere`, `after_interaction`, `final`). `trace=False` must remain byte-for-byte behavior-compatible. New layers should read the trace and supply bounded biases rather than rewriting core formulas. Contracts: `docs/CORE.md` and `docs/INCREMENTAL_PLAN.md`.
+`tick(..., trace=True)` adds `result["trace"]` with phase snapshots. Corrected order: `before`, `after_decay`, `after_slow_channels`, `after_appraisal`, `after_interaction`, `after_atmosphere`, `final`. Legacy atmosphere order is `after_appraisal`, `after_atmosphere`, `after_interaction`, `final`. `trace=False` must remain behavior-compatible. New layers should read the trace and supply bounded biases rather than rewriting core formulas. Contracts: `docs/CORE.md` and `docs/INCREMENTAL_PLAN.md`.
 
 ### L1 boundary
 
@@ -92,7 +96,20 @@ L2 (2026-10-26) fixed four semantics:
 
 `legacy_slow_channels=True` (old guilt/cumulative/slow baseline) plus `legacy_interactions=True` (absolute interactions) approximates pre-L1.1 behavior. Snapshots persist both flags. Details: `docs/L2_SLOW_CHANNELS.md`.
 
-### Meta-emotion (planned L3.5)
+### L3 boundary
+
+`atmosphere.py` owns pure L3 transforms: atmosphere clamp/target/drift, gated modulation, scar shift clamp, and three-channel scar amplification. It imports only `core.Channel` and stdlib — never `engine`, `tolerance`, `memory`, SQLite, or network. `SensitizationStore` stays in `engine.py` because it is persistent state.
+
+Default `legacy_atmosphere=False` (corrected):
+
+- Atmosphere modulates gated appraisal **before** state write, using the tick-entry atmosphere.
+- Shock detection happens after interactions. Current tick shock intensity feeds a 5-entry window, updates atmosphere, and applies from the **next** tick.
+- Atmosphere is clamped to `[-1, 1]` at tick entry, after drift, on snapshot load, and on `wake()`.
+- Scar amplification only touches sadness / fear / anger, only when `goal_conducibility < 0`; effective shift ∈ [0, 0.6] and max multiplier is 1.6.
+
+`legacy_atmosphere=True` preserves pre-L3 exactly: late gated modulation after state write, zero shock density, no clamp, and the two old `StepTrace.notes`. Snapshot payload includes the flag. `test_l3_atmosphere_scars.py` has 32 tests. There is deliberately no L3 golden: L3 is composition-root ordering, not a pure channel line; L1/L2 four goldens must stay unchanged. Details: `docs/L3_ATMOSPHERE_SCARS.md`.
+
+### Meta-emotion (planned L3.5; L3 prerequisite complete)
 
 Meta-emotion is a **second-order process**: an emotion about a primary emotion (e.g., shame about anger), not an 11th channel. It reads `StepTrace`, produces `meta_appraisal` / `meta_emotions` / `regulation_bias`, and may only supply bounded biases to expression, regulation, and tolerance load. It must not rewrite `core.py` formulas, change `Personality`, or add new base channels. Stable character tendencies belong in `MetaEmotionProfile`; momentary states belong in `MetaEmotionState`. Design: `docs/META_EMOTION.md`. L1/L2 must stay free of meta-emotion coupling.
 
@@ -102,16 +119,21 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 Appraisal (6-dim cognitive evaluation)
   → raw activation (per-channel)
   → gate_appraisal (trust/love gates modulate input)
-  → scar amplification (SensitizationStore)
-  → tick() — apply to state with saturation
-  → atmosphere drift (shock density → tense/relaxed)
-  → atmosphere modulation (amplifies or buffers channels)
+  → tolerance negative_gain
+  → scar amplification (only sadness/fear/anger; shift ≤ 0.6)
+  → atmosphere modulation (tick-entry atmosphere; before state write)
+  → state write with saturation
+  → boundary trust penalty
   → interaction matrix (activation above per-channel baseline; trust baseline = trust_target(love))
   → shock detection (exp(Δ×2)-1)
+  → shock density → atmosphere drift (clamped; applies next tick)
   → tolerance.update (load / capacity / zone, affects next tick)
   → memory store (Arousal-driven, 30-min consolidation)
   → respond() or respond_llm() → utterance
 ```
+
+`legacy_atmosphere=True` instead writes state, then drifts with zero shock, late-modulates gated,
+applies boundary/interactions, and detects shock — pre-L3 behavior for exact A/B.
 
 ### Key classes
 
@@ -120,7 +142,7 @@ Appraisal (6-dim cognitive evaluation)
 | `EmotionalState` | 10-channel float state. `felt(ch)` returns log₁₀ perception. `delta(ch)` compares against `_previous` snapshot. |
 | `Personality` | OCEAN → `baseline()` maps Big Five to per-channel baselines. Locked — personality doesn't change. |
 | `Appraisal` | 6-dim cognitive evaluation: `goal_relevance`, `goal_conduciveness`, `expectedness`, `other_agency`, `coping_potential`, `social_evaluation`. All 0–1. |
-| `StepTrace` (`core.py`) | Phase snapshots from `tick(trace=True)`; observation only. |
+| `StepTrace` (`core.py`) | Phase snapshots + L3 atmosphere/scar observations from `tick(trace=True)`; observation only. |
 | `EmotionEngine` | Composition root. `tick(appraisal)` runs full update cycle. `wake()` handles offline time. Per-agent instance (one engine = one character). |
 | `MemoryItem` / `MemoryStoreDB` | Legacy SQLite-backed memory. Arousal-driven storage (not valence). 30-min consolidation window (Nielson 2007). |
 | `ToleranceState` (`tolerance.py`) | Window of tolerance. Negative-only load, trust/love expand capacity, two-tick hysteresis, hyper/hypo control multipliers. |
@@ -188,7 +210,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1 reference-line behavior requires regenerating `fixtures/l1_golden.json` and reviewing every diff. Keep `fixtures/l1_golden_legacy.json` unchanged unless the legacy path itself changes. New layers must keep L1 golden unchanged when disabled.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value.
 
 ## Related files (Desktop, not in repo)
 
