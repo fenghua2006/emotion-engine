@@ -285,7 +285,9 @@ L3.5 的验收措辞相应改为“关闭元情绪时 L3 A/B 场景不变”，�
 - shock 分母是 `len(FAST_CHANNELS)` = 7，包含 guilt；L3 未改。
 - 下界 `-1.0` 在自然事件序列中很少触及：基础目标为 -0.6，arousal 只会抬高目标；
   下界主要防止异常快照/手动值。
-- 伤疤仍是单条最大 shift 压缩 tolerance capacity，不累加多条伤疤（保持旧语义）。
+- L3 的通道放大仍按单条伤疤 shift 生效；L5 起 tolerance capacity 默认按事件类型
+  定向压缩，`legacy_tolerance=True` / `capacity_model="scalar"` 保留旧的 global max
+  `scar_pressure` 语义。
 
 ## 9. 与 L3.5 的边界
 
@@ -296,10 +298,21 @@ L3.5 元情绪已完成（v0，trace-only）：
   clamp 或伤疤放大逻辑。
 - 元情绪读取最终的 `atmosphere`、`scar_shift`、`scar_channels`，只做二阶评估；
   不回写氛围或伤疤。
-- `tolerance_load_bias` 只是观测值，不进入 tolerance；L5 接入时需避免与伤疤
-  负荷重复计算。
+- `tolerance_load_bias` 默认仍是观测值；L5 显式开启后才进入 tolerance。
 
 L3.5 的实现与验收见 [`META_EMOTION.md`](META_EMOTION.md)。
+
+## 9.5 与 L5 的边界
+
+L5 校准核心已完成（2026-10-26）：
+
+- `_scar_pressure_by_tag()` 把所有已登记 tag 的 clamp 后 `threshold_shift`
+  交给 `ToleranceState`；L5 用 `SCAR_DOMAIN_MAP` 按域取 max。
+- 通道放大逻辑（sadness / fear / anger，≤1.6×）不变；L5 只改 capacity 压缩。
+- `legacy_tolerance=True` 或 `capacity_model="scalar"`：忽略 tag map，回到
+  单条最大 `scar_pressure` 与旧 `scar_load`，逐值复现 pre-L5。
+- 伤疤压缩 capacity、meta load 增加 load，两者不重复计同一来源。
+- L5 的 golden 与验收见 [`TOLERANCE.md`](TOLERANCE.md)。
 
 ## 10. 相关文档
 

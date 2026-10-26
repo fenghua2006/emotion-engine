@@ -150,7 +150,9 @@ def create_<name>(
 注意事项：
 
 - profile 不写 `Personality`，也不是 OCEAN 的一部分；
-- v0 只在 `trace=True` 时输出，不改变 `respond()`、tolerance 或基础曲线；
+- v0 只在 `trace=True` 时输出，不改变 `respond()` 或基础曲线；
+- tolerance 默认也不受影响；若角色需要 meta 负荷，显式设置
+  `tolerance_meta_load_enabled=True`（默认关闭，bias ≤0.2，使用上一 tick 上下文）；
 - 只传 profile 不会自动开启，必须显式 `meta_emotion_enabled=True`；
 - 参考实现：`characters/furina.py` 的两个 profile 与
   `characters/meta_emotion_demo.py`。

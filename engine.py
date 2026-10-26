@@ -68,12 +68,16 @@ import math
 import json
 import sqlite3
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from tolerance import (
+    CAPACITY_MODEL_MULTI,
+    CAPACITY_MODEL_SCALAR,
+    VALID_CAPACITY_MODELS,
     ZONE_HYPER,
     ZONE_HYPO,
+    ToleranceConfig,
     ToleranceState,
 )
 
@@ -152,6 +156,21 @@ class EmotionEngine:
     # 必须显式 meta_emotion_enabled=True。profile 是角色配置，不写入快照。
     meta_emotion_enabled: bool = False
     meta_emotion_profile: Optional[MetaEmotionProfile] = None
+    # L5: 多域容量默认开启；legacy_tolerance 把配置与状态都切回旧标量模型。
+    tolerance_config: Optional[ToleranceConfig] = None
+    legacy_tolerance: bool = False
+    # L5: 默认只让 meta 情绪写 trace；显式开启后才消费有界 load bias。
+    tolerance_meta_load_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        config = self.tolerance_config or self.tolerance.config
+        if config.capacity_model not in VALID_CAPACITY_MODELS:
+            config = replace(config, capacity_model=CAPACITY_MODEL_MULTI)
+        if self.legacy_tolerance:
+            config = replace(config, capacity_model=CAPACITY_MODEL_SCALAR)
+        self.tolerance_config = config
+        self.tolerance.config = config
+        self.tolerance.capacity_model = config.capacity_model
 
     def _scar_pressure(self) -> float:
         """旧伤疤对耐受窗的压缩程度。取最强的一条，不累加。"""
@@ -162,12 +181,26 @@ class EmotionEngine:
         )
         return max(0.0, min(1.0, strongest))
 
+    def _scar_pressure_by_tag(self) -> Dict[str, float]:
+        """按事件类型返回伤疤压力；L5 多域容量按域取 max。"""
+        return {
+            tag: max(0.0, min(1.0, clamp_scar_shift(
+                pattern.threshold_shift,
+            )))
+            for tag, pattern in self.scars.patterns.items()
+        }
+
     def _update_tolerance(self, *,
                           shock_channels: Tuple[str, ...] = (),
                           boundary_violation: bool = False,
-                          elapsed_hours: float = 0.0) -> str:
+                          elapsed_hours: float = 0.0,
+                          meta_load_bias: float = 0.0) -> str:
         """用当前通道状态刷新耐受窗。必须在通道更新之后调用。"""
         baseline = {ch.value: value for ch, value in self.personality.baseline().items()}
+        scalar = (
+            self.legacy_tolerance
+            or self.tolerance.capacity_model == CAPACITY_MODEL_SCALAR
+        )
         return self.tolerance.update(
             state=self.state.to_dict(),
             baseline=baseline,
@@ -179,6 +212,10 @@ class EmotionEngine:
             shock_channels=shock_channels,
             boundary_violation=boundary_violation,
             scar_pressure=self._scar_pressure(),
+            scar_pressure_by_tag=(
+                None if scalar else self._scar_pressure_by_tag()
+            ),
+            meta_load_bias=0.0 if scalar else meta_load_bias,
             elapsed_hours=elapsed_hours,
         )
 
@@ -578,12 +615,38 @@ class EmotionEngine:
                         setattr(self.state, ch_name, current + clamped)
             self._last_saga = now
 
+        # L5: 可选的 meta 负荷必须在耐受窗更新前算好。只消费上一 tick
+        # 的 zone/overload，避免 meta ↔ tolerance 在同一 tick 内互相反馈。
+        meta_state = None
+        meta_load_bias = 0.0
+        if (
+            self.meta_emotion_enabled
+            and self.tolerance_meta_load_enabled
+            and not self.legacy_tolerance
+            and self.tolerance.capacity_model == CAPACITY_MODEL_MULTI
+        ):
+            meta_state = evaluate_meta_emotion(
+                state=self.state,
+                baseline=self.personality.baseline(),
+                personality=self.personality,
+                appraisal=appraisal,
+                atmosphere=self.atmosphere,
+                tolerance_zone=self.tolerance.zone,
+                overload_ratio=self.tolerance.overload_ratio,
+                scar_pressure=scar_shift,
+                scar_channels=tuple(scar_channels),
+                blends=tuple(blends),
+                profile=self.meta_emotion_profile,
+            )
+            meta_load_bias = meta_state.regulation_bias.tolerance_load_bias
+
         # Step 8: 刷新耐受窗。放在通道与氛围更新之后，
         # 让本 tick 的过载在下一 tick 才影响增益（带两 tick 滞回）。
         self._update_tolerance(
             shock_channels=tuple(shock_channels),
             boundary_violation=boundary_violation,
             elapsed_hours=elapsed_hours,
+            meta_load_bias=meta_load_bias,
         )
 
         # 更新计时器
@@ -601,19 +664,20 @@ class EmotionEngine:
             # 放在所有 state / atmosphere / tolerance 更新之后，确保不反向
             # 影响本 tick 或后续曲线。
             if self.meta_emotion_enabled:
-                meta_state = evaluate_meta_emotion(
-                    state=self.state,
-                    baseline=self.personality.baseline(),
-                    personality=self.personality,
-                    appraisal=appraisal,
-                    atmosphere=self.atmosphere,
-                    tolerance_zone=self.tolerance.zone,
-                    overload_ratio=self.tolerance.overload_ratio,
-                    scar_pressure=trace_data.scar_shift,
-                    scar_channels=tuple(trace_data.scar_channels),
-                    blends=tuple(blends),
-                    profile=self.meta_emotion_profile,
-                )
+                if meta_state is None:
+                    meta_state = evaluate_meta_emotion(
+                        state=self.state,
+                        baseline=self.personality.baseline(),
+                        personality=self.personality,
+                        appraisal=appraisal,
+                        atmosphere=self.atmosphere,
+                        tolerance_zone=self.tolerance.zone,
+                        overload_ratio=self.tolerance.overload_ratio,
+                        scar_pressure=trace_data.scar_shift,
+                        scar_channels=tuple(trace_data.scar_channels),
+                        blends=tuple(blends),
+                        profile=self.meta_emotion_profile,
+                    )
                 meta_payload = meta_state.to_trace_dict()
                 trace_data.meta_enabled = True
                 trace_data.meta_appraisal = meta_payload["meta_appraisal"]
@@ -801,6 +865,7 @@ def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH,
             "legacy_interactions": engine.legacy_interactions,
             "legacy_slow_channels": engine.legacy_slow_channels,
             "legacy_atmosphere": engine.legacy_atmosphere,
+            "legacy_tolerance": engine.legacy_tolerance,
         }
         db.execute(
             "INSERT INTO snapshots (state_json, atmosphere, saved_at) VALUES (?,?,?)",
@@ -848,8 +913,29 @@ def load_snapshot(engine: "EmotionEngine", path: str = DB_PATH) -> bool:
 
         snapshot_atmosphere = data.get("atmosphere", row[1])
 
+        # L5: 先恢复 legacy flag，再用“当前配置 + 必要 scalar 化”重建状态。
+        # tolerance_config 是代码级配置，不写入快照；续跑时需重新提供。
+        if "legacy_tolerance" in data:
+            engine.legacy_tolerance = bool(data.get("legacy_tolerance"))
+        tolerance_config = engine.tolerance_config or engine.tolerance.config
+        if tolerance_config.capacity_model not in VALID_CAPACITY_MODELS:
+            tolerance_config = replace(
+                tolerance_config, capacity_model=CAPACITY_MODEL_MULTI,
+            )
+        if engine.legacy_tolerance:
+            tolerance_config = replace(
+                tolerance_config, capacity_model=CAPACITY_MODEL_SCALAR,
+            )
+        engine.tolerance_config = tolerance_config
         if "tolerance" in data:
-            engine.tolerance = ToleranceState.from_dict(data.get("tolerance"))
+            engine.tolerance = ToleranceState.from_dict(
+                data.get("tolerance"), config=tolerance_config,
+            )
+            if engine.legacy_tolerance:
+                engine.tolerance.capacity_model = CAPACITY_MODEL_SCALAR
+        else:
+            engine.tolerance.config = tolerance_config
+            engine.tolerance.capacity_model = tolerance_config.capacity_model
         if "events_today" in data:
             engine.events_today = int(data.get("events_today", 0))
         if "positive_events" in data:

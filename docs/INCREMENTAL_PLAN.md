@@ -16,7 +16,7 @@
 | **L3** | 氛围与伤疤 | ✅ 2026-10-26 | 顺序修正可 A/B；shock 密度非零；伤疤三通道 ≤60%；166 tests |
 | **L3.5** | 元情绪：二阶评估与调节意图 | ✅ 2026-10-26（v0 trace-only） | 不新增通道；关闭时四套 golden 与 L3 A/B 不变；191 tests |
 | **L4** | 关系域记忆 | ⏳ | 记忆不写 Personality；预算可控 |
-| **L5** | 忍耐空间 | ⏳ 已实现待校准 | 参数有 golden set 依据 |
+| **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0；L5.1 待办） | 双 golden；四域容量；229 tests |
 | **L6** | 表达 / LLM / JEV / MCP | ⏳ | 全链路可回退、可观测 |
 
 ## L0：核心情绪线 ✅
@@ -251,8 +251,8 @@ legacy 同事件逐值保留：atmosphere -0.3774803783593781，
 
 - 不新增情绪通道；不接 JEV / LLM 生成元情绪；不改 tolerance 参数；
   不持久化 meta state / profile / enable 开关；不新增 golden，不重新生成 fixtures。
-- `tolerance_load_bias`、`expression_gain`、`display_rule` 目前均为观测值，
-  L5 / L6 接入时必须新增开关、默认关闭、重跑 golden 与 A/B。
+- L3.5 当时 `tolerance_load_bias`、`expression_gain`、`display_rule` 均为观测值；
+  L5 已为 tolerance load 新增默认关闭的开关，L6 仍负责表达侧接入。
 
 验收结果：
 
@@ -281,15 +281,67 @@ L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
 
 验收：记忆只影响 appraisal / relationship / prompt，不写 `Personality`；100 轮后 prompt 仍 ≤1200 字。
 
-## L5：忍耐空间
+## L5：耐受校准 ✅ v0（校准核心）
 
-1. 用 golden set 校准 load / capacity / deadband / recovery。
-2. 评估多维容量（愤怒 / 恐惧 / 亲密 / 批评）。
-3. 伤疤按事件类型压缩容量。
-4. 仪表盘 tolerance 区间带、load / capacity 折线。
-5. 检查 hyper / hypo 表达提示与行为一致。
+目标：把 `tolerance.py` 从手调标量控制层升级为可回归、可 A/B 的校准层，
+同时保持旧行为可逐值回退。
 
-验收：低负荷永远 regulated；hypo 只在持续过载 + 退缩型占优时出现；两 tick 滞回不抖动。
+交付：
+
+- `tolerance.py`：
+  - 默认 `capacity_model="multi"`，输出 `anger / fear / intimacy / criticism`
+    四域容量，有效 capacity 为加权平均；
+  - `SCAR_DOMAIN_MAP` 按事件类型压缩对应域，同域取 max；
+  - `meta_load_cap` / `domain_scar_load` 新配置；
+  - `capacity_by_domain` / `meta_load_bias` 观测字段；
+  - multi 序列化新三键，scalar 仍只输出旧六键。
+- `engine.py`：
+  - `tolerance_config`、`legacy_tolerance=False`、
+    `tolerance_meta_load_enabled=False`；
+  - `_scar_pressure_by_tag()`；
+  - 开启 meta load 时，在 Step 8 前用上一 tick zone / overload 计算一次；
+  - 快照保存 `legacy_tolerance` 与 multi 观测字段；配置不持久化。
+- `l5_events.py`：15 个冻结场景 / 41 步；`l5line.py` 提供
+  `run_scenario` / `run_sequence` 共享 current / legacy runner。
+- `scripts/generate_l5_tolerance_golden.py`：`--check` / `--legacy`。
+- `fixtures/l5_tolerance_golden.json` / `..._legacy.json`。
+- `test_l5_tolerance.py`：38 个测试。
+- `docs/TOLERANCE.md`：模型、系数、伤疤映射、meta bias、golden、限制。
+
+模型要点：
+
+1. 四域系数加权平均对齐旧标量目标（trust `.28`、love `.1375`、
+   neuro `.205`、atm+ `.102`、atm− `.0495`），中性漂移 `<0.01`。
+2. 每域先 clamp 到 `[0.35, 1.80]`，再加权；极端输入不保证有效容量触底。
+3. 伤疤：`social_hurt` → anger/fear/criticism；`criticism` → anger/criticism；
+   `cold_shoulder` → fear/intimacy；`self_blame` → intimacy。
+4. meta bias 默认关闭；开启后加在 instant load，硬上限 `0.20`，不逐 tick 累加。
+5. `legacy_tolerance=True` 强制 scalar + global max scar + 忽略 meta bias。
+
+验收结果：
+
+```text
+38 L5 tests, OK；全套 229 tests, OK
+两套 golden 通过；L1/L2 四套 golden 无 diff
+calm current capacity 0.862350；legacy 0.857500
+anger_hyper: 1 tick pending → 2 tick hyper
+withdrawal_hypo: 2 tick hypo
+recovery: hyper → 4h → pending → regulated
+scar social_hurt 0.6: anger/fear/criticism −0.12，intimacy 不变
+capacity floor 0.35 / ceiling 1.80
+meta bias 0.05/0.20/0.50 → +0.05/+0.20/+0.20
+fuzz 500 组：有限、[0.35,1.80]、[0,3]、合法 zone
+```
+
+不做 / 留到 L5.1：
+
+- 仪表盘 tolerance 区间带、load / capacity / 四域折线；
+- hyper / hypo 本地表达模板、Live2D 与 `_action_tendency` 一致性；
+- 长期压力导致的基线容量慢漂移；
+- 伤疤跨域扩散；
+- 不改 `respond()`、模板、Live2D。
+
+详细记录见 [`TOLERANCE.md`](TOLERANCE.md)。
 
 ## L6：表达 / LLM / JEV / MCP
 
@@ -306,12 +358,12 @@ L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
 ## 顺序
 
 ```text
-L0 → L1 → L2 → L3 → L3.5 → L6
-                         ├→ L4 → L6
-                         └→ L5 → L6
+L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L6
+                         └→ L4 → L6
 ```
 
-L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L4 / L5 可在 L3.5 后并行；L6 最后。
+L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L5 校准核心已完成，
+L4 仍待开始；L6 最后。L5.1（仪表盘 / 表达一致性）可在 L4 前后并行。
 
 ## 每层 Definition of Done
 

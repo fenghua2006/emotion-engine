@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Sequence
+from typing import Dict, Mapping, NamedTuple, Optional, Sequence
 
 ZONE_REGULATED = "regulated"
 ZONE_HYPER = "hyper"
@@ -41,9 +41,78 @@ LOAD_WEIGHTS: Dict[str, float] = {
     "guilt": 0.10,
 }
 
+# ── L5 多维容量 ──────────────────────────────────────
+CAPACITY_MODEL_SCALAR = "scalar"
+CAPACITY_MODEL_MULTI = "multi"
+VALID_CAPACITY_MODELS = (CAPACITY_MODEL_MULTI, CAPACITY_MODEL_SCALAR)
+
+DOMAIN_NAMES = ("anger", "fear", "intimacy", "criticism")
+DOMAIN_WEIGHTS: Dict[str, float] = {
+    "anger": 0.25,
+    "fear": 0.30,
+    "intimacy": 0.25,
+    "criticism": 0.20,
+}
+
+# 伤疤按事件类型压缩对应域；同域取 max，不跨域叠加。
+SCAR_DOMAIN_MAP: Dict[str, tuple] = {
+    "anger": ("social_hurt", "criticism"),
+    "fear": ("social_hurt", "cold_shoulder"),
+    "intimacy": ("cold_shoulder", "self_blame"),
+    "criticism": ("criticism", "social_hurt"),
+}
+
+META_LOAD_HARD_CAP = 0.20
+
+
+class DomainCoefficients(NamedTuple):
+    base: float
+    trust: float
+    love: float
+    neuro: float
+    atmosphere_positive: float
+    atmosphere_negative: float
+
+
+# 加权平均对齐旧标量公式的系数：base .75 / trust .28 / love .1375 /
+# neuro .205 / atm+ .102 / atm- .0495。域内仍保留各自的特化。
+DOMAIN_CAPACITY_COEFFICIENTS: Dict[str, DomainCoefficients] = {
+    "anger": DomainCoefficients(
+        0.75, 0.20, 0.10, 0.20, 0.08, 0.040,
+    ),
+    "fear": DomainCoefficients(
+        0.75, 0.36, 0.10, 0.25, 0.12, 0.060,
+    ),
+    "intimacy": DomainCoefficients(
+        0.75, 0.20, 0.25, 0.16, 0.08, 0.050,
+    ),
+    "criticism": DomainCoefficients(
+        0.75, 0.36, 0.10, 0.20, 0.13, 0.045,
+    ),
+}
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def _finite(value: float, default: float = 0.0) -> float:
+    """把非有限/非数值输入归到安全默认值。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _resolve_capacity_model(candidate: Optional[str],
+                            fallback: Optional[str]) -> str:
+    """选择合法容量模型；优先 candidate，再 fallback，最后 multi。"""
+    if candidate in VALID_CAPACITY_MODELS:
+        return str(candidate)
+    if fallback in VALID_CAPACITY_MODELS:
+        return str(fallback)
+    return CAPACITY_MODEL_MULTI
 
 
 @dataclass(frozen=True)
@@ -71,6 +140,13 @@ class ToleranceConfig:
     max_capacity: float = 1.80
     max_load: float = 3.00
 
+    # L5: 默认多域加权容量；"scalar" 复现 pre-L5 标量模型。
+    capacity_model: str = CAPACITY_MODEL_MULTI
+    # 多域模式下伤疤对单个域的压缩系数；scalar 仍使用 scar_load。
+    domain_scar_load: float = 0.20
+    # meta 情绪调节负荷的硬上限；只能调低，不能高于 0.20。
+    meta_load_cap: float = 0.20
+
 
 @dataclass
 class ToleranceState:
@@ -87,6 +163,17 @@ class ToleranceState:
     pending_zone: Optional[str] = None
     pending_ticks: int = 0
     config: ToleranceConfig = field(default_factory=ToleranceConfig)
+    # L5 观测字段：当前使用的容量模型、四域容量、本 tick 实际 meta 负荷。
+    capacity_model: Optional[str] = None
+    capacity_by_domain: Dict[str, float] = field(default_factory=dict)
+    meta_load_bias: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.config is None:
+            self.config = ToleranceConfig()
+        self.capacity_model = _resolve_capacity_model(
+            self.capacity_model, self.config.capacity_model,
+        )
 
     # ── 更新 ──────────────────────────────────────────
 
@@ -101,19 +188,42 @@ class ToleranceState:
                shock_channels: Sequence[str] = (),
                boundary_violation: bool = False,
                scar_pressure: float = 0.0,
-               elapsed_hours: float = 0.0) -> str:
+               scar_pressure_by_tag: Optional[Mapping[str, float]] = None,
+               meta_load_bias: float = 0.0,
+               elapsed_hours: float = 0.0,
+               capacity_model: Optional[str] = None) -> str:
         """更新负荷、容量与模式；返回当前 zone。
 
         elapsed_hours 用于负荷自然恢复。传入 0 表示“不衰减”，
         适合连续 tick 或测试；正常 tick 传真实间隔即可。
         """
-        self.capacity = self._compute_capacity(
-            trust=trust,
-            love=love,
-            neuroticism=neuroticism,
-            atmosphere=atmosphere,
-            scar_pressure=scar_pressure,
+        model = _resolve_capacity_model(
+            capacity_model or self.capacity_model,
+            self.config.capacity_model,
         )
+        self.capacity_model = model
+
+        if model == CAPACITY_MODEL_SCALAR:
+            # pre-L5 路径：容量公式逐字保留，忽略多域伤疤与 meta 负荷。
+            self.capacity = self._compute_capacity(
+                trust=trust,
+                love=love,
+                neuroticism=neuroticism,
+                atmosphere=atmosphere,
+                scar_pressure=scar_pressure,
+            )
+            self.capacity_by_domain = {}
+        else:
+            self.capacity, self.capacity_by_domain = (
+                self._compute_capacity_domains(
+                    trust=trust,
+                    love=love,
+                    neuroticism=neuroticism,
+                    atmosphere=atmosphere,
+                    scar_pressure=scar_pressure,
+                    scar_pressure_by_tag=scar_pressure_by_tag,
+                )
+            )
 
         instant_load = self._compute_instant_load(
             state=state,
@@ -124,9 +234,23 @@ class ToleranceState:
             boundary_violation=boundary_violation,
         )
 
+        if model == CAPACITY_MODEL_MULTI:
+            cap = min(
+                META_LOAD_HARD_CAP,
+                max(0.0, _finite(self.config.meta_load_cap,
+                                 META_LOAD_HARD_CAP)),
+            )
+            self.meta_load_bias = _clamp(
+                _finite(meta_load_bias, 0.0), 0.0, cap,
+            )
+            if self.meta_load_bias:
+                instant_load += self.meta_load_bias
+        else:
+            self.meta_load_bias = 0.0
+
         # 包络式负荷：当前事件立即抬高负荷；没有新事件时按 4h 半衰期回落。
         # 不是把上一帧 load 直接丢掉，也不是无限累加。
-        elapsed = max(0.0, elapsed_hours)
+        elapsed = max(0.0, _finite(elapsed_hours, 0.0))
         recovery = math.exp(-elapsed / max(0.1, self.config.recovery_hours))
         self.load = _clamp(
             max(instant_load, self.load * recovery),
@@ -158,6 +282,81 @@ class ToleranceState:
         capacity -= self.config.scar_load * _clamp(scar_pressure, 0.0, 1.0)
         return _clamp(capacity, self.config.min_capacity,
                       self.config.max_capacity)
+
+    def _compute_capacity_domains(
+        self, *, trust: float, love: float, neuroticism: float,
+        atmosphere: float, scar_pressure: float,
+        scar_pressure_by_tag: Optional[Mapping[str, float]],
+    ) -> tuple:
+        """四域容量 + 加权有效容量。
+
+        每域先独立 clamp，再做加权平均；这样单个域触底不会把
+        其它域也拖到最低值。domain_scar_load 只用于多域模型。
+        """
+        trust_value = _clamp(_finite(trust, 0.0), 0.0, 1.0)
+        love_value = _clamp(_finite(love, 0.0), 0.0, 1.0)
+        neuroticism_value = _clamp(_finite(neuroticism, 0.5), 0.0, 1.0)
+        atmosphere_value = _finite(atmosphere, 0.0)
+        atmosphere_positive = max(0.0, atmosphere_value)
+        atmosphere_negative = max(0.0, -atmosphere_value)
+        domain_scar_load = max(0.0, _finite(
+            self.config.domain_scar_load, 0.0,
+        ))
+
+        capacities: Dict[str, float] = {}
+        for domain in DOMAIN_NAMES:
+            coefficients = DOMAIN_CAPACITY_COEFFICIENTS[domain]
+            scar = self._domain_scar_pressure(
+                domain, scar_pressure, scar_pressure_by_tag,
+            )
+            # config.base_capacity 可整体平移域容量；系数里的 base 作为
+            # 域偏移量保留（当前四个域都是 0.75，偏移为 0）。
+            configured_base = _finite(
+                self.config.base_capacity, coefficients.base,
+            )
+            capacity = (
+                configured_base
+                + (coefficients.base - 0.75)
+                + coefficients.trust * trust_value
+                + coefficients.love * love_value
+            )
+            capacity *= 1.0 - coefficients.neuro * (
+                neuroticism_value - 0.5
+            )
+            capacity -= coefficients.atmosphere_positive * atmosphere_positive
+            capacity += coefficients.atmosphere_negative * atmosphere_negative
+            capacity -= domain_scar_load * scar
+            capacities[domain] = _clamp(
+                capacity,
+                self.config.min_capacity,
+                self.config.max_capacity,
+            )
+
+        effective = sum(
+            DOMAIN_WEIGHTS[domain] * capacities[domain]
+            for domain in DOMAIN_NAMES
+        )
+        return _clamp(
+            effective, self.config.min_capacity, self.config.max_capacity,
+        ), capacities
+
+    def _domain_scar_pressure(
+        self, domain: str, scar_pressure: float,
+        scar_pressure_by_tag: Optional[Mapping[str, float]],
+    ) -> float:
+        """返回某个域受到的伤疤压力。
+
+        - 未提供按 tag 的映射时回退到旧 scalar pressure（向后兼容）。
+        - 提供映射时只读取该域对应的 tag，取 max，不累加。
+        - 空映射/未知 tag 视为无压缩。
+        """
+        if scar_pressure_by_tag is None:
+            return _clamp(_finite(scar_pressure, 0.0), 0.0, 1.0)
+        values = []
+        for tag in SCAR_DOMAIN_MAP.get(domain, ()):
+            raw = scar_pressure_by_tag.get(tag, 0.0)
+            values.append(_clamp(_finite(raw, 0.0), 0.0, 1.0))
+        return max(values, default=0.0)
 
     def _compute_instant_load(self, *, state: Dict[str, float],
                               baseline: Dict[str, float],
@@ -259,7 +458,7 @@ class ToleranceState:
     # ── 序列化 ────────────────────────────────────────
 
     def to_dict(self) -> Dict[str, object]:
-        return {
+        data: Dict[str, object] = {
             "load": round(self.load, 4),
             "capacity": round(self.capacity, 4),
             "zone": self.zone,
@@ -267,12 +466,23 @@ class ToleranceState:
             "pending_zone": self.pending_zone,
             "pending_ticks": self.pending_ticks,
         }
+        # scalar 模式保持 pre-L5 的旧六个键；多域模式才增加观测字段。
+        if self.capacity_model == CAPACITY_MODEL_MULTI:
+            data["capacity_model"] = CAPACITY_MODEL_MULTI
+            data["capacity_by_domain"] = {
+                domain: round(float(self.capacity_by_domain[domain]), 4)
+                for domain in DOMAIN_NAMES
+                if domain in self.capacity_by_domain
+            }
+            data["meta_load_bias"] = round(float(self.meta_load_bias), 4)
+        return data
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, object]],
                   config: Optional[ToleranceConfig] = None) -> "ToleranceState":
+        config = config or ToleranceConfig()
         if not data:
-            return cls(config=config or ToleranceConfig())
+            return cls(config=config)
 
         zone = str(data.get("zone", ZONE_REGULATED))
         if zone not in VALID_ZONES:
@@ -282,14 +492,68 @@ class ToleranceState:
         if pending not in VALID_ZONES:
             pending = None
 
+        raw_model = data.get("capacity_model", config.capacity_model)
+        model = _resolve_capacity_model(
+            None if raw_model is None else str(raw_model),
+            config.capacity_model,
+        )
+
+        try:
+            pending_ticks = max(0, int(data.get("pending_ticks", 0)))
+        except (TypeError, ValueError):
+            pending_ticks = 0
+
+        load = _clamp(
+            _finite(data.get("load", 0.0), 0.0),
+            0.0, config.max_load,
+        )
+        capacity = _clamp(
+            _finite(data.get("capacity", 0.75), 0.75),
+            config.min_capacity, config.max_capacity,
+        )
+        overload_ratio = max(
+            0.0, _finite(data.get("overload_ratio", 0.0), 0.0),
+        )
+
+        capacity_by_domain: Dict[str, float] = {}
+        meta_load_bias = 0.0
+        if model == CAPACITY_MODEL_MULTI:
+            raw_domains = data.get("capacity_by_domain")
+            if isinstance(raw_domains, Mapping):
+                for domain in DOMAIN_NAMES:
+                    if domain not in raw_domains:
+                        continue
+                    try:
+                        value = float(raw_domains[domain])
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(value):
+                        continue
+                    capacity_by_domain[domain] = _clamp(
+                        value, config.min_capacity, config.max_capacity,
+                    )
+            cap = min(
+                META_LOAD_HARD_CAP,
+                max(0.0, _finite(
+                    config.meta_load_cap, META_LOAD_HARD_CAP,
+                )),
+            )
+            meta_load_bias = _clamp(
+                _finite(data.get("meta_load_bias", 0.0), 0.0),
+                0.0, cap,
+            )
+
         return cls(
-            load=float(data.get("load", 0.0)),
-            capacity=float(data.get("capacity", 0.75)),
+            load=load,
+            capacity=capacity,
             zone=zone,
-            overload_ratio=float(data.get("overload_ratio", 0.0)),
+            overload_ratio=overload_ratio,
             pending_zone=pending,
-            pending_ticks=int(data.get("pending_ticks", 0)),
-            config=config or ToleranceConfig(),
+            pending_ticks=pending_ticks,
+            config=config,
+            capacity_model=model,
+            capacity_by_domain=capacity_by_domain,
+            meta_load_bias=meta_load_bias,
         )
 
 
@@ -309,6 +573,9 @@ def _demo() -> None:
             neuroticism=0.5, atmosphere=-0.3,
         )
     print("calm:", tolerance.to_dict())
+    print("  effective capacity:", round(tolerance.capacity, 4),
+          "domains:", {domain: round(value, 4)
+                       for domain, value in tolerance.capacity_by_domain.items()})
 
     stressed = dict(state)
     stressed.update({"sadness": 0.8, "anger": 0.9, "fear": 0.9,
@@ -322,6 +589,9 @@ def _demo() -> None:
             boundary_violation=True,
         )
     print("stressed:", tolerance.to_dict())
+    print("  effective capacity:", round(tolerance.capacity, 4),
+          "domains:", {domain: round(value, 4)
+                       for domain, value in tolerance.capacity_by_domain.items()})
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ L0 core.py         纯公式：通道 / 衰减 / 评估 / 门控 / 交互 / 慢�
        ├── L3 氛围与伤疤
        ├── L3.5 元情绪：二阶评估 / 调节意图 / 有界偏置（见 META_EMOTION.md）
        ├── L4 关系域记忆
-       ├── L5 耐受窗
+       ├── L5 耐受校准：四域容量 / 伤疤定向 / meta load 可选消费
        └── L6 表达 / LLM / JEV / MCP / 仪表盘
 ```
 
@@ -46,6 +46,8 @@ L0 core.py         纯公式：通道 / 衰减 / 评估 / 门控 / 交互 / 慢�
 - 任何 LLM / 网络 / SQLite
 
 `atmosphere.py` 只依赖 `core.Channel` 与标准库，不反向依赖 `engine.py`。
+`tolerance.py` 只依赖标准库，不导入 `engine` / `meta_emotion` / `core` /
+`memory` / SQLite / 网络；由 `test_l5_tolerance.py` 的 AST 测试锁定。
 `meta_emotion.py` 只依赖 `core` 与标准库（不导入 `engine` / `tolerance` /
 `memory` / `atmosphere` / SQLite / 网络库），由 AST 测试锁定。
 
@@ -145,8 +147,8 @@ python -m unittest test_core_line.py test_tolerance.py \
   test_engine_tolerance.py test_memory_system.py \
   test_l1_fast_channels.py test_interaction_activation.py \
   test_l2_slow_channels.py test_l3_atmosphere_scars.py \
-  test_l3_5_meta_emotion.py -v
-# 191 tests, OK（含 32 个 L3、25 个 L3.5 测试）
+  test_l3_5_meta_emotion.py test_l5_tolerance.py -v
+# 229 tests, OK（含 32 个 L3、25 个 L3.5、38 个 L5 测试）
 ```
 
 另外验证了：

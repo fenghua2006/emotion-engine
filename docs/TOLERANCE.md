@@ -1,6 +1,8 @@
 # 忍耐空间 / 耐受窗（Tolerance Window）
 
-> v0.7 已实现。代码：`tolerance.py`；集成：`engine.py`；测试：`test_tolerance.py`、`test_engine_tolerance.py`。
+> v0.7 控制层 + L5 校准核心（2026-10-26）。代码：`tolerance.py`；集成：`engine.py`；
+> 测试：`test_tolerance.py`、`test_engine_tolerance.py`、`test_l5_tolerance.py`；
+> golden：`fixtures/l5_tolerance_golden.json` / `..._legacy.json`。
 
 ## 1. 为什么不是“情绪值更高”
 
@@ -60,7 +62,39 @@ shock_bonus    = min(0.60, 0.10 × shock 通道数)
 boundary_bonus = 0.25（发生边界侵犯）
 ```
 
-### 3.2 容量
+### 3.2 容量（L5 默认：四域加权）
+
+L5 默认把“一个容量”拆成四个承受域：`anger / fear / intimacy / criticism`。
+每域先独立计算、独立 clamp，再按权重取有效容量：
+
+```text
+c_d = (base + t_d·clamp(trust,0,1) + l_d·clamp(love,0,1))
+      × (1 − n_d·(clamp(neuroticism,0,1) − 0.5))
+      − p_d·max(0, atmosphere)
+      + q_d·max(0, −atmosphere)
+      − domain_scar_load·scar_d
+c_d = clamp(c_d, 0.35, 1.80)
+capacity = clamp(Σ w_d·c_d, 0.35, 1.80)
+```
+
+| 域 | 权重 | trust | love | neuro | atm+ | atm− |
+|---|---:|---:|---:|---:|---:|---:|
+| anger | 0.25 | 0.20 | 0.10 | 0.20 | 0.08 | 0.040 |
+| fear | 0.30 | 0.36 | 0.10 | 0.25 | 0.12 | 0.060 |
+| intimacy | 0.25 | 0.20 | 0.25 | 0.16 | 0.08 | 0.050 |
+| criticism | 0.20 | 0.36 | 0.10 | 0.20 | 0.13 | 0.045 |
+
+系数加权平均对齐旧标量目标（base `.75`、trust `.28`、love `.1375`、
+neuro `.205`、atm+ `.102`、atm− `.0495`）。因此默认行为连续，但不再假设
+四个域以同样速度变化：
+
+- 高信任更扩 `fear / criticism`，对 `anger / intimacy` 影响较小；
+- 高爱更扩 `intimacy`；
+- 高神经质与紧绷氛围更压 `fear / criticism`；
+- 每域先 clamp 再平均，单个域触底不会把其它域一起拖到最低。
+
+`capacity_model="scalar"`（或 `legacy_tolerance=True`）仍走旧的单标量公式，
+逐值复现 pre-L5：
 
 ```text
 capacity = (0.75 + 0.25·trust + 0.15·love)
@@ -70,12 +104,35 @@ capacity = (0.75 + 0.25·trust + 0.15·love)
          − 0.15·scar_pressure
 ```
 
-并夹在 `[0.35, 1.80]`。含义：
+### 3.2.1 伤疤按事件类型压缩
 
-- 高信任、高爱 → 容量更大；
-- 高神经质 → 窗口更窄；
-- 紧绷氛围 → 容量下降；
-- 旧伤疤 → 同类事件更容易击穿。
+`scar_pressure_by_tag` 把伤疤 tag 映射到域，同域取 max，不累加：
+
+| 域 | 读取的 tag |
+|---|---|
+| anger | `social_hurt`, `criticism` |
+| fear | `social_hurt`, `cold_shoulder` |
+| intimacy | `cold_shoulder`, `self_blame` |
+| criticism | `criticism`, `social_hurt` |
+
+- 每域压缩量 = `domain_scar_load × scar_d`，默认 `0.20`。
+- 未提供 tag map（旧调用）时，四个域都回退到全局 `scar_pressure`。
+- 空 map / 未知 tag：不压缩任何域。
+- scalar / legacy：忽略 tag map，仍用 global max `scar_pressure` 与旧 `scar_load`。
+
+### 3.2.2 meta 负荷（默认关闭）
+
+`tolerance_meta_load_enabled=False` 时，L3.5 的 `tolerance_load_bias` 仍只写 trace。
+开启后（且 `meta_emotion_enabled=True`、非 legacy、`capacity_model="multi"`）：
+
+```text
+instant_load += min(max(0, tolerance_load_bias), min(0.20, meta_load_cap))
+```
+
+- 硬上限 `0.20`，`meta_load_cap` 只能调低。
+- 加在 instant load 上再进入包络，不直接加到上一帧 load，避免逐 tick 累加。
+- meta 使用**上一 tick** 的 zone / overload；本 tick 的 tolerance 更新在其后。
+- 伤疤压缩 capacity，meta 增加 load，两者不重复计同一来源。
 
 ### 3.3 负荷包络
 
@@ -122,18 +179,22 @@ else:
 1. tick 开始时用**上一 tick 的 zone** 决定衰减倍率；
 2. appraisal 门控后乘以负性增益；
 3. 交互矩阵按 `interaction_scale` 缩放负性增量；
-4. tick 末尾调用 `tolerance.update()`，为下一 tick 准备 zone。
+4. 若开启 meta load，在 tolerance 更新前用**上一 tick 的 zone / overload**
+   计算 `tolerance_load_bias`；
+5. tick 末尾调用 `tolerance.update()`，为下一 tick 准备 zone。
 
-因此区间切换不会在同一 tick 内“自我放大”。
+因此区间切换不会在同一 tick 内“自我放大”，meta bias 也不会在同一 tick
+形成“meta → tolerance → meta”的循环。
 
 ## 5. 信息流
 
 ```mermaid
 flowchart LR
     A[情绪通道 state] --> B[负性偏离 × 权重]
-    C[trust / love] --> D[容量]
-    E[neuroticism / 氛围 / 伤疤] --> D
+    C[trust / love] --> D[四域容量 → 加权平均]
+    E[neuroticism / 氛围 / 伤疤 tag] --> D
     F[shock / 边界侵犯] --> G[附加负荷]
+    M[meta load bias<br/>默认关闭] --> G
     B --> H[load]
     G --> H
     H --> I[overload_ratio = load / capacity]
@@ -151,12 +212,19 @@ flowchart LR
 
 ```python
 from engine import EmotionEngine, EmotionalState, Personality, Appraisal, MemoryStore, SensitizationStore
+from tolerance import ToleranceConfig
 
 engine = EmotionEngine(
     state=EmotionalState(),
     personality=Personality(neuroticism=0.7),
     memory=MemoryStore(),
     scars=SensitizationStore(),
+    # L5 默认 multi；legacy_tolerance=True 切回 pre-L5 标量。
+    tolerance_config=ToleranceConfig(domain_scar_load=0.20),
+    legacy_tolerance=False,
+    # 默认只让 meta 写 trace；显式开启后才消费 tolerance_load_bias。
+    meta_emotion_enabled=True,
+    tolerance_meta_load_enabled=False,
 )
 
 result = engine.tick(
@@ -172,37 +240,74 @@ result = engine.tick(
 
 print(result["tolerance"])
 # {'load': ..., 'capacity': ..., 'zone': 'regulated|hyper|hypo',
-#  'overload_ratio': ..., 'pending_zone': ..., 'pending_ticks': ...}
+#  'overload_ratio': ..., 'pending_zone': ..., 'pending_ticks': ...,
+#  'capacity_model': 'multi',
+#  'capacity_by_domain': {'anger': ..., 'fear': ...,
+#                         'intimacy': ..., 'criticism': ...},
+#  'meta_load_bias': 0.0}
+```
+
+A/B 对照：
+
+```python
+legacy = EmotionEngine(
+    state=EmotionalState(), personality=Personality(),
+    memory=MemoryStore(), scars=SensitizationStore(),
+    legacy_tolerance=True,
+)
+# legacy.tolerance.to_dict() 只返回旧六个键；
+# fixtures/l5_tolerance_golden_legacy.json 锁定逐值行为。
+```
+
+直接驱动 `ToleranceState` 时，L5 新参数都是可选的：
+
+```python
+tolerance.update(
+    state=..., baseline=..., trust=..., love=...,
+    trust_target_value=..., neuroticism=..., atmosphere=...,
+    scar_pressure=0.6,
+    scar_pressure_by_tag={"criticism": 0.6},  # None → 回退全局
+    meta_load_bias=0.2,
+    elapsed_hours=0.0,
+    capacity_model="multi",                   # 或 "scalar"
+)
 ```
 
 `tick()` 与 `wake()` 都接受 `now=`，便于确定性测试。`wake()` 会把离线小时数传给负荷恢复。
 
 ### 快照
 
-`save_snapshot()` / `load_snapshot()` 现在会保存并恢复：
+`save_snapshot()` / `load_snapshot()` 会保存并恢复：
 
 - 10 通道状态与 `atmosphere`
-- `legacy_atmosphere`（L3 顺序模式）
-- `tolerance`（load / capacity / zone / hysteresis）
+- `legacy_interactions` / `legacy_slow_channels` / `legacy_atmosphere`
+- `legacy_tolerance`（L5 标量兼容模式）
+- `tolerance` 状态：旧六字段；multi 模式另存 `capacity_model`、
+  `capacity_by_domain`、`meta_load_bias`
 - `events_today` / `positive_events`
 - `_last_saga` / `_recent_shocks`
 - 快照时间（作为恢复后的计时起点）
 - 旧伤疤
 
-旧版“只存通道字典”的快照仍可读取。L3 corrected 模式在加载和 `wake()` 入口
-都会把 atmosphere clamp 到 `[-1, 1]`；legacy 模式保持旧值不 clamp。tolerance 参数
-和 load / capacity 公式未因 L3 改变。
+`ToleranceConfig` 是代码级配置，**不写入快照**；要精确续跑自定义参数，
+加载时需给目标引擎重新提供同一个 `tolerance_config`。旧快照没有新键时
+按默认 multi 迁移，旧六字段值保持不变；`legacy_tolerance=True` 的快照会
+在重建状态前先恢复 flag，并把配置与状态都切回 scalar。
 
-### L3.5 元情绪负荷（仅观测）
+meta state、profile、`meta_emotion_enabled` 与 `tolerance_meta_load_enabled`
+仍不写入快照。旧版“只存通道字典”的快照仍可读取。L3 corrected 模式在加载和
+`wake()` 入口都会把 atmosphere clamp 到 `[-1, 1]`；legacy 模式保持旧值不 clamp。
+
+### L3.5 元情绪负荷（默认仅观测）
 
 `meta_emotion.py` 会输出 `tolerance_load_bias`（`[0, 0.2]`，只统计
-`suppress / ruminate / avoid`），但 v0 **不喂给 `ToleranceState`**：
+`suppress / ruminate / avoid`）。默认仍只写 trace：
 
-- 当前 `load` / `capacity` / `zone` 完全不受元情绪影响；
-- 快照不保存 meta state、profile 或 enable 开关；
-- L5 接入时必须新增开关、默认关闭，并避免与伤疤负荷重复计数。
-  伤疤是事件记忆的放大，元情绪是对当前情绪的态度；两者可以叠加，但不能
-  对同一来源重复计负荷。
+- `tolerance_meta_load_enabled=False` 时，`load` / `capacity` / `zone`
+  完全不受元情绪影响；
+- 开启后，bias 作为有界附加负荷进入 instant load（见 3.2.2）；
+- 伤疤压缩 capacity、meta 增加 load，两者可以共存，但不重复计同一来源；
+- 快照不保存 meta state、profile 或 enable 开关，恢复后需重新配置。
 
 ## 7. 与表达层
 
@@ -215,31 +320,51 @@ print(result["tolerance"])
 ## 8. 测试
 
 ```bash
-python -m unittest test_tolerance.py -v
+python -m unittest test_tolerance.py test_engine_tolerance.py -v
+python -m unittest test_l5_tolerance.py -v
 
-python -m unittest test_engine_tolerance.py -v
+python scripts/generate_l5_tolerance_golden.py --check
+python scripts/generate_l5_tolerance_golden.py --legacy --check
 ```
 
 覆盖：
 
-- 基线调节态、负荷≈0
-- 高 trust/love 扩展容量；高神经质收窄
-- 慢通道不重复计负荷
-- 负性事件进入 hyper；持续退缩进入 hypo；低负荷永不 hypo
-- 两 tick 滞回；恢复需要滞回 + 时间；负荷自然衰减
-- 冲击/边界附加负荷
-- 模式倍率
-- 序列化与非法 zone 回退
-- 引擎 tick 返回 tolerance
-- hyper 放大负性 appraisal、拖慢负性衰减
-- 快照完整往返
-- 可注入时钟
-- prompt / respond 暴露 zone
+- `l5line.run_scenario` / `run_sequence` 共享 current / legacy 更新路径
+- L5 current / legacy 两套 golden（15 场景 / 41 步，误差 `<1e-9`）
+- 四域容量手算、加权平均、每域 clamp、域特化
+- 默认 multi 与旧 scalar 的漂移上界
+- 伤疤按 tag 定向压缩、同域 max、空 map / 未知 tag、旧全局回退
+- meta bias 附加、封顶、不累加、`meta_load_cap` 只降不升
+- 引擎只在 meta + load 开关都开启且 multi 时消费；legacy 忽略
+- meta 使用上一 tick zone / overload，trace on/off 下只计算一次
+- 序列化旧六键 / 新三键、非法 payload、快照往返与配置重供
+- 低负荷永不 hypo、两 tick 滞回、fuzz 有限性与边界
+- `tolerance.py` AST 导入边界
+- 既有基线：负荷≈0、慢通道不重复计负荷、hyper/hypo、模式倍率、
+  冲击/边界附加、引擎 tick / prompt / respond / 可注入时钟
+
+L5 验收结果：
+
+```text
+38 L5 tests, OK；全套 229 tests, OK
+golden: 15 scenarios / 41 steps（current + legacy）
+calm current: capacity 0.862350
+  domains anger 0.832 / fear 0.878 / intimacy 0.865 / criticism 0.8735
+calm legacy:  capacity 0.857500（旧公式逐值）
+anger_hyper:  1 tick regulated → 2 tick hyper
+withdrawal_hypo: 2 tick hypo
+recovery: hyper → 4h 衰减 → pending → regulated
+scar social_hurt 0.6: anger/fear/criticism −0.12，intimacy 不变
+capacities: floor 0.35 / ceiling 1.80
+meta bias 0.05/0.20/0.50 → load +0.05/+0.20/+0.20
+```
 
 ## 9. 已知限制
 
-- 目前是**单标量容量**，不是“对愤怒 / 恐惧 / 亲密 / 批评分别有不同容量”的多维模型。
-- `scar_pressure` 取最强伤疤，不区分事件类型；同类伤疤叠加尚未实现。
+- 四域容量仍是**手调系数 + golden 锁定**，不是从数据学习出的参数。
+- 伤疤同域取 max，不累加；跨域的长期扩散（一个伤疤逐渐影响全部域）尚未实现。
 - 长期压力导致的基线容量下降（人格慢漂移）尚未接入。
-- 仪表盘还没有 tolerance 折线/区间带。
-- 参数是手调默认值，尚未用 golden set 校准。
+- 仪表盘还没有 tolerance 折线/区间带，也没有四域容量展示。
+- hyper / hypo 的本地表达模板、Live2D 与 `_action_tendency` 一致性尚未校准；
+  L5.1 再处理表达层一致性。
+- meta load 默认关闭，且只有 `multi + 非 legacy` 才消费；尚未做长期 A/B 曲线。

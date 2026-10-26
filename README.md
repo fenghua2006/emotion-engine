@@ -40,7 +40,7 @@ Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时�
 └─────────┘    └──────────┘    └──────────────┘
 ```
 
-`tolerance.py` 不新增情绪通道，而是在每次 tick 后读取状态，决定下一 tick 是调节态、过度唤醒还是低唤醒。
+`tolerance.py` 不新增情绪通道，而是在每次 tick 后读取状态，决定下一 tick 是调节态、过度唤醒还是低唤醒。L5 默认把容量拆成愤怒 / 恐惧 / 亲密 / 批评四域，再取加权有效容量。
 
 底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。
 
@@ -100,7 +100,7 @@ result = engine.tick(Appraisal(
 # result["felt"]  → log 压缩感知值
 # result["memory"] → 记忆统计
 # result["atmosphere"] → 氛围值
-# result["tolerance"] → 负荷 / 容量 / zone / 滞回状态
+# result["tolerance"] → 负荷 / 有效容量 / 四域容量 / zone / 滞回状态
 ```
 
 ## L0 核心情绪线
@@ -116,7 +116,7 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；全量 191 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L5 后全量 229 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - L0–L6 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
@@ -128,7 +128,7 @@ trace = result["trace"]
 - 46 条冻结事件：角色 31 + engine demo 3 + 合成边界 12。
 - 双 golden：`fixtures/l1_golden.json`（当前）+ `l1_golden_legacy.json`（v0.7 对照），误差 < `1e-9`。
 - 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 166 tests，
-  L3.5 完成后 **191 tests, OK**。
+  L3.5 完成后 191 tests，L5 校准核心完成后 **229 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -179,7 +179,7 @@ appraise → gate → tolerance gain → scar amplification
 - 详细公式、A/B 数据与“为什么不设 L3 golden”：[`docs/L3_ATMOSPHERE_SCARS.md`](docs/L3_ATMOSPHERE_SCARS.md)。
 - 测试：`python -m unittest test_l3_atmosphere_scars.py -v`。
 
-## 元情绪（L3.5 v0，trace-only）
+## 元情绪（L3.5 v0，默认 trace-only；L5 可选消费耐受负荷）
 
 元情绪不是第 11 个情绪通道，而是“以某个 primary emotion 为对象”的二阶过程：羞耻于愤怒、内疚于快乐、对恐惧感兴趣、为自己的平静骄傲。它读取最终状态与 `StepTrace`，输出表达、调节和耐受的有界偏置，不改写 `core.py` 公式，也不写 `Personality`。
 
@@ -205,11 +205,13 @@ print(result["trace"]["meta_emotions"])
 - **开启方式**：只有 `meta_emotion_enabled=True` 且 `trace=True` 才计算并追加
   `meta_enabled / meta_appraisal / meta_emotions / regulation_bias`；`trace=False` 不计算。
 - **中性默认**：无 profile 时不预设“愤怒→羞耻”；标签由四维元评估与通用规则决定。
-- **v0 只观测**：`expression_gain`、`display_rule`、`tolerance_load_bias` 尚未被
-  `respond()`、tolerance 或下一 tick 消费。
+- **默认只观测**：`expression_gain`、`display_rule`、`tolerance_load_bias` 不进入
+  `respond()` 或下一 tick appraisal。
+- **L5 可选消费**：`tolerance_meta_load_enabled=True` 且 meta 也开启时，
+  `tolerance_load_bias` 作为有界附加负荷（≤0.2）进入 tolerance；默认关闭。
 - 同一 anger 的两种二阶态度：
   `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
-- 25 个 L3.5 测试；全量 **191 tests, OK**。
+- 25 个 L3.5 测试；L5 后全量 **229 tests, OK**。
 - 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
@@ -237,24 +239,41 @@ memory.remember_turn(
 - 完整设计、信息流图与 GitHub 调研：[`docs/MEMORY_SYSTEM.md`](docs/MEMORY_SYSTEM.md)。
 - 测试：`python -m unittest test_memory_system.py -v`。
 
-## 忍耐空间 v0.7
+## 忍耐空间 v0.7 + L5 耐受校准
 
-`tolerance.py` 实现 window of tolerance：负荷只取负性通道相对基线的偏离，`trust / love` 扩展容量而不是进入负荷。
+`tolerance.py` 实现 window of tolerance：负荷只取负性通道相对基线的偏离，`trust / love` 扩展容量而不是进入负荷。L5 默认使用四域容量（anger / fear / intimacy / criticism），有效 capacity 为加权平均；伤疤按事件类型定向压缩。
 
 ```python
+from tolerance import ToleranceConfig
+
+engine = EmotionEngine(
+    ...,
+    tolerance_config=ToleranceConfig(domain_scar_load=0.20),
+    legacy_tolerance=False,             # True → pre-L5 标量
+    tolerance_meta_load_enabled=False,  # True → 消费 meta bias
+)
 result = engine.tick(appraisal)
 print(result["tolerance"])
 # {'load': 0.42, 'capacity': 0.86, 'zone': 'regulated',
-#  'overload_ratio': 0.49, 'pending_zone': None, 'pending_ticks': 0}
+#  'overload_ratio': 0.49, 'pending_zone': None, 'pending_ticks': 0,
+#  'capacity_model': 'multi',
+#  'capacity_by_domain': {'anger': ..., 'fear': ...,
+#                         'intimacy': ..., 'criticism': ...},
+#  'meta_load_bias': 0.0}
 ```
 
 - `regulated`：正常评估与表达。
 - `hyper`：更敏感、更难平复、负性交互增强；下一 tick 负性增益 ×1.5、半衰期 ×2.0。
 - `hypo`：过载后的关机，反应变慢；不是“平静”。
 - 低负荷不会触发 hypo；区间切换需要两 tick 滞回。
-- 快照会保存并恢复 tolerance、事件计数、Saga 计时和 shock 历史。
-- 测试：`python -m unittest test_tolerance.py test_engine_tolerance.py -v`。
-- 完整公式、区间判定与限制：[`docs/TOLERANCE.md`](docs/TOLERANCE.md)。
+- 伤疤映射：`social_hurt` → anger/fear/criticism；`criticism` → anger/criticism；
+  `cold_shoulder` → fear/intimacy；`self_blame` → intimacy；同域取 max。
+- `legacy_tolerance=True`：强制 scalar + global max scar，逐值复现 pre-L5。
+- meta load 默认关闭；开启后使用上一 tick zone / overload，bias ≤0.2，不累加。
+- 快照会保存 `legacy_tolerance` 与 multi 观测字段；`ToleranceConfig` 不持久化。
+- 测试：`python -m unittest test_tolerance.py test_engine_tolerance.py test_l5_tolerance.py -v`。
+- L5 golden：`python scripts/generate_l5_tolerance_golden.py --check`（legacy 加 `--legacy`）。
+- 完整公式、域系数、伤疤映射与限制：[`docs/TOLERANCE.md`](docs/TOLERANCE.md)。
 
 ## 10 通道
 

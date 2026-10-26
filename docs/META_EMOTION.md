@@ -1,13 +1,14 @@
 # 元情绪（Meta-Emotion）
 
-> 状态：**L3.5 v0 已实现（trace-only）**；前置 L3 已于 2026-10-26 完成。  
-> 代码：`meta_emotion.py`；集成：`engine.py`；角色示例：`characters/furina.py`、`characters/meta_emotion_demo.py`；测试：`test_l3_5_meta_emotion.py`。  
-> 层：**L3.5**（L3 氛围/伤疤之后，L4 记忆之前）。  
-> 关联：`docs/CORE.md`、`docs/INCREMENTAL_PLAN.md`、`core.py`、`engine.py`。
+> 状态：**L3.5 v0 已实现（默认 trace-only）**；L5 可选消费 `tolerance_load_bias`（默认关闭）。
+> 代码：`meta_emotion.py`；集成：`engine.py`；角色示例：`characters/furina.py`、`characters/meta_emotion_demo.py`；测试：`test_l3_5_meta_emotion.py`。
+> 层：**L3.5**（L3 氛围/伤疤之后，L4 记忆之前）。
+> 关联：`docs/CORE.md`、`docs/TOLERANCE.md`、`docs/INCREMENTAL_PLAN.md`、`core.py`、`engine.py`。
 
-v0 的边界很窄：元情绪只读最终状态与 `StepTrace`，结果只进入 trace；
-不改变基础通道、tolerance、氛围、表达输出或 `Personality`。任何会改变曲线的
-消费都留给后续层，并必须重新做开关与 A/B。
+默认边界仍然很窄：元情绪只读最终状态与 `StepTrace`，结果只进入 trace；
+不改变基础通道、tolerance、氛围、表达输出或 `Personality`。L5 新增了一个
+显式开关，允许把 `tolerance_load_bias` 作为有界附加负荷；它默认关闭，
+不影响旧曲线，也不消费表达增益或 display rule。
 
 ## 1. 一句话结论
 
@@ -250,8 +251,9 @@ profile 的 `action_bias[target]` 只给指定动作加 `0.25`，不是硬覆盖
 - `tolerance_load_bias = clamp(Σ suppress/ruminate/avoid 的 0.06·intensity, 0, 0.2)`；
 - `reappraisal_target`：主导 kind 对应的四维，去重后最多 2 项。
 
-v0 的 `tolerance_load_bias` **只记录，不喂给 tolerance**；表达增益和 display rule
-也**不喂给 `respond()`**。
+默认 `tolerance_meta_load_enabled=False`：`tolerance_load_bias` **只记录，不喂给
+tolerance**。L5 开启后，它才作为 `[0, 0.2]` 的附加负荷进入 instant load；表达
+增益和 display rule 仍**不喂给 `respond()`**。
 
 ### 4.3 输出只做有界偏置
 
@@ -277,8 +279,12 @@ target（demo 中还有 sadness / fear / disgust / surprise，总负荷偏置 0.
 - 任何会改变曲线的参数必须有开关、默认关闭、前后对比；
 - 元情绪不能写 `Personality`，不能改 `baseline()`；
 - 元情绪不能直接改 `core.py` 的 `decay()`、`appraise()`、`gate_appraisal()`；
-- **v0 没有任何实际消费点**：`regulation_bias` 只作为 trace 观测，不进入
-  `respond()`、`tolerance.update()` 或下一 tick 的 appraisal。
+- **默认没有实际消费点**：`regulation_bias` 只作为 trace 观测，不进入
+  `respond()` 或下一 tick 的 appraisal。
+- L5 唯一例外：`meta_emotion_enabled=True`、`tolerance_meta_load_enabled=True`、
+  非 legacy 且 `capacity_model="multi"` 时，`tolerance_load_bias` 进入
+  `tolerance.update()`；使用上一 tick 的 zone / overload，避免同 tick 循环。
+  关闭开关或 legacy 时路径与 v0 相同。
 
 ### 4.4 StepTrace 扩展
 
@@ -361,7 +367,7 @@ MetaEmotionProfile(
 | L3 | ✅ 修正氛围/伤疤顺序；元情绪读取稳定的 atmosphere / scar 状态 |
 | **L3.5** | ✅ **v0 已实现（trace-only）：二阶评估 + 调节意图 + 有界偏置** |
 | L4 | 记忆可提供元情绪信念与关系规范；元情绪不直接写记忆 |
-| L5 | 未来消费 `tolerance_load_bias`；必须避免与伤疤负荷重复计算 |
+| **L5** | ✅ 校准核心：可选用 `tolerance_load_bias`（`tolerance_meta_load_enabled=False`）；伤疤压 capacity、meta 加 load，不重复计 |
 | L6 | 未来消费 `display_rule` / `expression_gain`；LLM 只表达，不生成元情绪 |
 
 ## 6. L3.5 v0 交付与验收
@@ -384,10 +390,21 @@ MetaEmotionProfile(
 
 `belief`、记忆、LLM、JEV 均未进入 v0。
 
+L5 后续接入（`docs/TOLERANCE.md`）：`EmotionEngine` 新增
+`tolerance_meta_load_enabled=False`；开启且 meta 也开启时，tick 在耐受窗
+更新前用上一 tick 的 zone / overload 计算一次 meta，`tolerance_load_bias`
+经 `[0, 0.2]` 限幅后加入 instant load。`test_l5_tolerance.py` 覆盖开关组合、
+调用次数、上一 tick 语义与不重复计伤疤。
+
 ### 验收结果
 
-- ✅ `python -m unittest test_l3_5_meta_emotion.py -v`：**25 tests OK**。
-- ✅ `python -m unittest discover -v`：**191 tests OK**。
+- ✅ `python -m unittest test_l3_5_meta_emotion.py -v`：**25 tests OK**（L3.5 基线）。
+- ✅ L5 后全套：**229 tests OK**；L5 单独 **38 tests OK**。
+- ✅ `tolerance_meta_load_enabled=False` 时 L3.5 trace 键集合、调用次数与
+  post-update 计算路径不变。
+- ✅ 开启后 meta 只计算一次（trace on/off 一致），并使用上一 tick zone / overload。
+- ✅ snapshot 仍不持久化 meta state / profile / enable 开关；新增
+  `legacy_tolerance` 与 multi tolerance 观测字段。
 - ✅ 四套 golden `--check` 全部通过，`fixtures/` 无 diff：
   - `l1_golden.json` / `l1_golden_legacy.json`
   - `l2_golden.json` / `l2_golden_legacy.json`
@@ -436,13 +453,15 @@ git status --short
 
 ### 不做
 
-- 不把 bias 应用到表达、tolerance 或下一 tick 的 appraisal；
+- 不把表达增益 / display rule 应用到 `respond()`；
+- 默认不把 `tolerance_load_bias` 应用到 tolerance；L5 只在显式开关下消费；
 - 不新增基础情绪通道；
 - 不接 JEV / LLM 生成元情绪；
 - 不改 `core.py` 公式、`Personality`、tolerance 参数或 atmosphere / scar 逻辑；
 - 不持久化 meta state、profile 或 enable 开关；
-- 不新增 golden，不重新生成 `fixtures/`；
 - 不新增 `StepTrace` phase，不增加 top-level `result["meta_emotion"]`。
+
+L3.5 当时不新增 golden；L5 另建 `l5_tolerance_golden*`，不修改 L1/L2 四套 golden。
 
 ## 7. 开放问题与 v0 结论
 
@@ -462,14 +481,15 @@ git status --short
    与表达。`valence` 是 kind 的固定标签值，不是独立连续维度。
 
 4. **元情绪是否影响下一 tick 的 appraisal 增益？**
-   v0 明确不影响。`regulation_bias` 没有任何消费点；后续若接入，必须新增
-   开关、保持默认关闭，并重跑 golden 与 A/B。
+   不影响 appraisal 本体。v0 的 `regulation_bias` 没有消费点；L5 只新增了
+   tolerance load 的可选消费，默认关闭。表达增益仍留给 L6，并且必须新增
+   开关、保持默认关闭、重跑 golden 与 A/B。
 
 5. **元情绪与“伤疤”的区别？**
    伤疤是事件记忆对通道的放大，元情绪是对当前情绪的再评估。v0 只读取
-   `scar_pressure` / `scar_channels` 来降低 goal、social、control；
-   `tolerance_load_bias` 尚未进入 tolerance。L5 接入时必须避免与伤疤负荷
-   重复计算。
+   `scar_pressure` / `scar_channels` 来降低 goal、social、control。
+   L5 中伤疤按事件类型压缩 capacity，meta 只增加 bounded load；两者可以
+   同时生效，但不把同一来源重复计入负荷。
 
 6. **角色档案是否由 LLM 蒸馏生成？**
    v0 手工配置 profile，未接 LLM。`MetaEmotionProfile` 只是可选的稳定偏好，
@@ -478,8 +498,9 @@ git status --short
 另外两个 v0 边界：
 
 - **profile 不是 Personality**：不写 OCEAN、不写 `baseline()`、不持久化。
-- **trace-only 是临时契约**：等 L5/L6 需要消费 bias 时，必须重新设计开关与
-  回滚路径，不能直接把当前 trace 值接到行为上。
+- **trace-only 仍是默认契约**：L5 已为 tolerance 增加显式开关与 legacy 回滚；
+  L6 消费表达 bias 时仍需单独设计开关与回滚路径，不能直接把当前 trace 值
+  接到行为上。
 
 ## 8. 参考文献
 

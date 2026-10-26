@@ -40,8 +40,9 @@ python -m unittest test_l1_fast_channels.py test_interaction_activation.py -v
 python -m unittest test_l2_slow_channels.py -v
 python -m unittest test_l3_atmosphere_scars.py -v
 python -m unittest test_l3_5_meta_emotion.py -v
+python -m unittest test_l5_tolerance.py -v
 
-# Full suite (191 tests)
+# Full suite (229 tests)
 python -m unittest discover
 
 # L1 golden generation / verification
@@ -55,6 +56,12 @@ python scripts/generate_l2_golden.py                    # current L2 behavior
 python scripts/generate_l2_golden.py --check
 python scripts/generate_l2_golden.py --legacy           # old slow channels + absolute interactions
 python scripts/generate_l2_golden.py --legacy --check
+
+# L5 tolerance golden generation / verification
+python scripts/generate_l5_tolerance_golden.py          # current multi-domain behavior
+python scripts/generate_l5_tolerance_golden.py --check
+python scripts/generate_l5_tolerance_golden.py --legacy # pre-L5 scalar / global-max scar
+python scripts/generate_l5_tolerance_golden.py --legacy --check
 
 # Dashboard (real-time visualization)
 uv run python dashboard/server.py                  # default generic character
@@ -73,7 +80,7 @@ uv run python C:\Users\Administrator\Desktop\furina_fresh.py    # Baseline + sce
 
 ## Architecture
 
-Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,650 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
+Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,650 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
 
 ### L0 boundary
 
@@ -113,16 +120,27 @@ Default `legacy_atmosphere=False` (corrected):
 
 `legacy_atmosphere=True` preserves pre-L3 exactly: late gated modulation after state write, zero shock density, no clamp, and the two old `StepTrace.notes`. Snapshot payload includes the flag. `test_l3_atmosphere_scars.py` has 32 tests. There is deliberately no L3 golden: L3 is composition-root ordering, not a pure channel line; L1/L2 four goldens must stay unchanged. Details: `docs/L3_ATMOSPHERE_SCARS.md`.
 
-### Meta-emotion (L3.5 v0, trace-only)
+### Meta-emotion (L3.5 v0, default trace-only)
 
-Meta-emotion is a **second-order process**: an emotion about a primary emotion (e.g., shame about anger), not an 11th channel. `meta_emotion.py` is a pure module importing only stdlib + `core` (enforced by an AST test). It computes `meta_appraisal` (four dimensions), `meta_emotions` (seven kinds), and `regulation_bias` (expression gain, display rule, regulation action, tolerance load bias, reappraisal targets), but v0 **does not consume** any bias: `respond()`, tolerance, and the next tick stay untouched.
+Meta-emotion is a **second-order process**: an emotion about a primary emotion (e.g., shame about anger), not an 11th channel. `meta_emotion.py` is a pure module importing only stdlib + `core` (enforced by an AST test). It computes `meta_appraisal` (four dimensions), `meta_emotions` (seven kinds), and `regulation_bias` (expression gain, display rule, regulation action, tolerance load bias, reappraisal targets). Default is still trace-only; L5 adds one opt-in consumer for `tolerance_load_bias`.
 
-- Enable only with `EmotionEngine(meta_emotion_enabled=True)` plus `trace=True`; `trace=False` never computes meta-emotion.
+- Enable only with `EmotionEngine(meta_emotion_enabled=True)` plus `trace=True`; `trace=False` never computes meta-emotion unless L5 load consumption also needs it.
+- L5 opt-in: `tolerance_meta_load_enabled=True` (default false) and non-legacy multi tolerance; bias ≤0.2 is added to instant load using the **previous** tick zone / overload. `expression_gain` / `display_rule` remain unconsumed.
 - Trace compatibility: disabled → original 27 keys; enabled → adds exactly `meta_enabled`, `meta_appraisal`, `meta_emotions`, `regulation_bias`. No top-level `result["meta_emotion"]`.
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
-- Not persisted: `MetaEmotionState` is per-tick; profile / enable flag are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; full suite 191 tests. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38 tests and full suite is 229. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+
+### Tolerance calibration (L5 v0)
+
+`tolerance.py` defaults to `capacity_model="multi"`: four domain capacities (`anger`, `fear`, `intimacy`, `criticism`) are computed independently, clamped to `[0.35, 1.80]`, then averaged with weights `.25/.30/.25/.20`. Coefficients are calibrated so the weighted means match the old scalar formula (base `.75`, trust `.28`, love `.1375`, neuro `.205`, atm+ `.102`, atm− `.0495`).
+
+- `SCAR_DOMAIN_MAP` compresses only the affected domains: `social_hurt` → anger/fear/criticism; `criticism` → anger/criticism; `cold_shoulder` → fear/intimacy; `self_blame` → intimacy. Same-domain tags use max, not sum.
+- `legacy_tolerance=True` forces scalar capacity, global-max scar pressure, and ignores meta bias; `fixtures/l5_tolerance_golden_legacy.json` locks the pre-L5 values.
+- `EmotionEngine` fields: `tolerance_config=None`, `legacy_tolerance=False`, `tolerance_meta_load_enabled=False`.
+- Snapshots persist `legacy_tolerance` plus multi observation keys (`capacity_model`, `capacity_by_domain`, `meta_load_bias`); `ToleranceConfig` is code-level and must be re-supplied for exact resume.
+- L5 golden: 15 scenarios / 41 steps; `scripts/generate_l5_tolerance_golden.py` (`--check`, `--legacy`). Details: `docs/TOLERANCE.md`.
 
 ### Core data flow
 
@@ -138,7 +156,8 @@ Appraisal (6-dim cognitive evaluation)
   → interaction matrix (activation above per-channel baseline; trust baseline = trust_target(love))
   → shock detection (exp(Δ×2)-1)
   → shock density → atmosphere drift (clamped; applies next tick)
-  → tolerance.update (load / capacity / zone, affects next tick)
+  → optional meta precompute (previous tick zone/overload; default off)
+  → tolerance.update (four-domain capacity, typed scar, optional meta bias)
   → memory store (Arousal-driven, 30-min consolidation)
   → respond() or respond_llm() → utterance
 ```
@@ -157,7 +176,7 @@ applies boundary/interactions, and detects shock — pre-L3 behavior for exact A
 | `EmotionEngine` | Composition root. `tick(appraisal)` runs full update cycle. `wake()` handles offline time. Per-agent instance (one engine = one character). |
 | `MetaEmotionProfile` / `MetaEmotionState` (`meta_emotion.py`) | Stable character preferences vs per-tick second-order appraisal. v0 trace-only; not persisted. |
 | `MemoryItem` / `MemoryStoreDB` | Legacy SQLite-backed memory. Arousal-driven storage (not valence). 30-min consolidation window (Nielson 2007). |
-| `ToleranceState` (`tolerance.py`) | Window of tolerance. Negative-only load, trust/love expand capacity, two-tick hysteresis, hyper/hypo control multipliers. |
+| `ToleranceState` (`tolerance.py`) | Window of tolerance. Negative-only load, four-domain capacity weighted into `capacity`, typed scar compression, two-tick hysteresis, hyper/hypo control multipliers. `capacity_model="scalar"` reproduces pre-L5. |
 | `RelationshipMemoryStore` / `MemoryService` (`memory.py`) | Relationship-scoped long-term memory: cards, facts, relationship summary, open loops. SQLite FTS5 + CJK bigrams. |
 | `SensitizationStore` | Kindling (Post 1992) + Bayesian threat (MindLAB 2024). Pattern matching on Appraisal. |
 
@@ -184,7 +203,7 @@ Two systems coexist:
 
 ### Tolerance window
 
-`tolerance.py` reads the 10 channels after each tick and updates load/capacity/zone. Load only counts negative-channel deviations above baseline plus trust deficit, shock, and boundary violation. Trust/love expand capacity. Zones: `regulated`, `hyper`, `hypo`. Two-tick hysteresis; hyper amplifies negative appraisal ×1.5 and doubles negative half-life, hypo reduces negative gain to ×0.55. Low load never triggers hypo.
+`tolerance.py` reads the 10 channels after each tick and updates load/capacity/zone. Load only counts negative-channel deviations above baseline plus trust deficit, shock, and boundary violation. Trust/love expand capacity; L5 splits capacity into `anger/fear/intimacy/criticism` and uses a weighted effective capacity. Zones: `regulated`, `hyper`, `hypo`. Two-tick hysteresis; hyper amplifies negative appraisal ×1.5 and doubles negative half-life, hypo reduces negative gain to ×0.55. Low load never triggers hypo. `legacy_tolerance=True` restores scalar capacity + global-max scar; `tolerance_meta_load_enabled=True` optionally adds a bounded (≤0.2) meta load using the previous tick's context.
 
 ### LLM fallback chain
 
@@ -222,7 +241,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed.
 
 ## Related files (Desktop, not in repo)
 

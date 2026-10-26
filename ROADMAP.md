@@ -114,6 +114,25 @@
 - demo：`characters/meta_emotion_demo.py` → shame 0.585 / suppress vs pride 0.340 / express
 - 设计根因、公式与验收见 `docs/META_EMOTION.md`
 
+## 增量开发 L5 ✅ — 耐受校准 v0（校准核心）
+- `tolerance.py` 默认四域容量：anger / fear / intimacy / criticism，有效 capacity
+  为加权平均；每域独立 clamp 到 `[0.35, 1.80]`
+- 伤疤按事件类型定向压缩：`social_hurt` / `criticism` / `cold_shoulder` /
+  `self_blame` 映射到不同域，同域取 max，不累加
+- `meta_load_bias` 可选消费：`tolerance_meta_load_enabled=False` 默认关闭；
+  开启后用上一 tick zone / overload，bias ≤0.2，加在 instant load
+- `legacy_tolerance=True`：scalar 容量 + global max scar + 忽略 meta bias，
+  逐值复现 pre-L5
+- 新增 `l5_events.py`（15 场景 / 41 步）、`l5line.py`、golden 生成脚本；
+  `fixtures/l5_tolerance_golden*.json` 双 golden
+- `ToleranceConfig` / `ToleranceState` 新字段与序列化；快照保存
+  `legacy_tolerance` 与 multi 观测键，配置不持久化
+- 38 个 L5 测试；全量 229 tests OK；L1/L2 四套 golden 无 diff
+- calm capacity current 0.862350 / legacy 0.857500；hyper / hypo / 滞回 /
+  capacity 上下界 / fuzz 全部锁定
+- 留到 L5.1：仪表盘 tolerance 区间带与四域折线、hyper/hypo 表达一致性
+- 详细设计见 `docs/TOLERANCE.md`
+
 ## v0.7 — MCP 封装（进行中）
 - Claude Code / Codex 直接调引擎
 - /emotion tick / /emotion recall

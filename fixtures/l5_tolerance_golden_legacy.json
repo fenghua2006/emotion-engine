@@ -1,0 +1,573 @@
+{
+  "meta": {
+    "layer": "L5",
+    "scenario_count": 15,
+    "step_count": 41,
+    "generated_by": "scripts/generate_l5_tolerance_golden.py",
+    "note": "golden 是当前行为基线，不是理论正确值；变更必须人工审阅。",
+    "mode": "legacy",
+    "capacity_model": "scalar",
+    "scar_mode": "global_max",
+    "meta_load_consumed": false,
+    "config": {
+      "base_capacity": 0.75,
+      "trust_capacity": 0.25,
+      "love_capacity": 0.15,
+      "neuroticism_narrowing": 0.2,
+      "trust_deficit_load": 0.35,
+      "trust_deficit_deadband": 0.25,
+      "shock_load": 0.1,
+      "boundary_load": 0.25,
+      "scar_load": 0.15,
+      "recovery_hours": 4.0,
+      "hysteresis_ticks": 2,
+      "recovery_ratio": 0.65,
+      "min_capacity": 0.35,
+      "max_capacity": 1.8,
+      "max_load": 3.0
+    }
+  },
+  "scenarios": {
+    "l5.calm_baseline": {
+      "label": "平静基线",
+      "note": "load≈0，regulated，四域容量都应输出。",
+      "steps": [
+        {
+          "key": "l5.calm_baseline.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.calm_baseline.1",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.calm_baseline.2",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.anger_hyper": {
+      "label": "战逃型过载",
+      "note": "第 1 tick 只 pending，第 2 tick 切 hyper。",
+      "steps": [
+        {
+          "key": "l5.anger_hyper.0",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "regulated",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": "hyper",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.anger_hyper.1",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "hyper",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.withdrawal_hypo": {
+      "label": "退缩型过载",
+      "note": "退缩分高于战逃分，过载后进入 hypo 而不是 hyper。",
+      "steps": [
+        {
+          "key": "l5.withdrawal_hypo.0",
+          "tolerance": {
+            "load": 0.964,
+            "capacity": 0.787,
+            "zone": "regulated",
+            "overload_ratio": 1.224904701398,
+            "pending_zone": "hypo",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.withdrawal_hypo.1",
+          "tolerance": {
+            "load": 0.964,
+            "capacity": 0.787,
+            "zone": "hypo",
+            "overload_ratio": 1.224904701398,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.recovery_hysteresis": {
+      "label": "过载后两 tick 恢复",
+      "note": "4h 衰减后仍需两 tick 才从 hyper 回到 regulated。",
+      "steps": [
+        {
+          "key": "l5.recovery_hysteresis.0",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "regulated",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": "hyper",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.recovery_hysteresis.1",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "hyper",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.recovery_hysteresis.2",
+          "tolerance": {
+            "load": 0.433178041979,
+            "capacity": 0.8575,
+            "zone": "hyper",
+            "overload_ratio": 0.505163897352,
+            "pending_zone": "regulated",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.recovery_hysteresis.3",
+          "tolerance": {
+            "load": 0.159357296011,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.185839412258,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.trust_deadband": {
+      "label": "trust 缺口 deadband",
+      "note": "缺口 0.20 不加载；超过 0.25 后才按比例计入。",
+      "steps": [
+        {
+          "key": "l5.trust_deadband.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.92,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.trust_deadband.1",
+          "tolerance": {
+            "load": 0.0525,
+            "capacity": 0.87,
+            "zone": "regulated",
+            "overload_ratio": 0.060344827586,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.trust_deadband.2",
+          "tolerance": {
+            "load": 0.14,
+            "capacity": 0.8075,
+            "zone": "regulated",
+            "overload_ratio": 0.173374613003,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.tense_capacity": {
+      "label": "紧绷氛围下的容量",
+      "note": "高神经质 + 紧绷氛围应压缩 fear/criticism 更多。",
+      "steps": [
+        {
+          "key": "l5.tense_capacity.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.723525,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.relaxed_capacity": {
+      "label": "放松氛围下的容量",
+      "note": "与 tense_capacity 对照，放松氛围略微扩展容量。",
+      "steps": [
+        {
+          "key": "l5.relaxed_capacity.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.813525,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.scar_event_types": {
+      "label": "四类伤疤的定向压缩",
+      "note": "social_hurt 压 anger/fear/criticism；self_blame 只压 intimacy。",
+      "steps": [
+        {
+          "key": "l5.scar_event_types.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.scar_event_types.1",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.scar_event_types.2",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.scar_event_types.3",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.scar_multi_tag": {
+      "label": "多伤疤同域取 max",
+      "note": "同域内取最大，不把多个伤疤相加。",
+      "steps": [
+        {
+          "key": "l5.scar_multi_tag.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.meta_bias_additive": {
+      "label": "meta load 附加与封顶",
+      "note": "bias 只加在 instant load，硬上限 0.20；最后一步按 4h 衰减。",
+      "steps": [
+        {
+          "key": "l5.meta_bias_additive.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.meta_bias_additive.1",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.meta_bias_additive.2",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.meta_bias_additive.3",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.meta_bias_additive.4",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.meta_bias_with_scar": {
+      "label": "meta load 与伤疤不重复计",
+      "note": "三步容量/域容量必须一致；只有 load 随 bias 变化。",
+      "steps": [
+        {
+          "key": "l5.meta_bias_with_scar.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.meta_bias_with_scar.1",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.meta_bias_with_scar.2",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.7675,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.combined_stress": {
+      "label": "组合压力",
+      "note": "高负荷 + 多伤疤 + 高神经质 + 紧绷 + 越界 + meta bias。",
+      "steps": [
+        {
+          "key": "l5.combined_stress.0",
+          "tolerance": {
+            "load": 1.717,
+            "capacity": 0.571215,
+            "zone": "regulated",
+            "overload_ratio": 3.0058734452,
+            "pending_zone": "hypo",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.combined_stress.1",
+          "tolerance": {
+            "load": 1.717,
+            "capacity": 0.571215,
+            "zone": "hypo",
+            "overload_ratio": 3.0058734452,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.capacity_floor": {
+      "label": "容量下界",
+      "note": "极端低容量应被 clamp 到 min_capacity。",
+      "steps": [
+        {
+          "key": "l5.capacity_floor.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 0.35,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.capacity_ceiling": {
+      "label": "容量上界",
+      "note": "极端高容量应被 clamp 到 max_capacity。",
+      "steps": [
+        {
+          "key": "l5.capacity_ceiling.0",
+          "tolerance": {
+            "load": 0.0,
+            "capacity": 1.8,
+            "zone": "regulated",
+            "overload_ratio": 0.0,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    },
+    "l5.long_alternating": {
+      "label": "长序列风暴/平静交替",
+      "note": "验证反复过载/恢复时的滞回与数值稳定性。",
+      "steps": [
+        {
+          "key": "l5.long_alternating.0",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "regulated",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": "hyper",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.long_alternating.1",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "hyper",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.long_alternating.2",
+          "tolerance": {
+            "load": 0.433178041979,
+            "capacity": 0.8575,
+            "zone": "hyper",
+            "overload_ratio": 0.505163897352,
+            "pending_zone": "regulated",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.long_alternating.3",
+          "tolerance": {
+            "load": 0.159357296011,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.185839412258,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.long_alternating.4",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "regulated",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": "hyper",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.long_alternating.5",
+          "tolerance": {
+            "load": 1.1775,
+            "capacity": 0.73492,
+            "zone": "hyper",
+            "overload_ratio": 1.602215207097,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        },
+        {
+          "key": "l5.long_alternating.6",
+          "tolerance": {
+            "load": 0.433178041979,
+            "capacity": 0.8575,
+            "zone": "hyper",
+            "overload_ratio": 0.505163897352,
+            "pending_zone": "regulated",
+            "pending_ticks": 1
+          }
+        },
+        {
+          "key": "l5.long_alternating.7",
+          "tolerance": {
+            "load": 0.159357296011,
+            "capacity": 0.8575,
+            "zone": "regulated",
+            "overload_ratio": 0.185839412258,
+            "pending_zone": null,
+            "pending_ticks": 0
+          }
+        }
+      ]
+    }
+  }
+}
