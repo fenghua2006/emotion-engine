@@ -64,11 +64,12 @@ L6 表达 / JEV / Noul / MCP（2026/10/27）:
   - MCP 外壳与 trace 回放在 mcp_server.py / scripts/replay_trace.py，不改动力学
   - 详细记录见 docs/JEV.md、docs/MCP.md
 
-L7 多角色情绪感染 v0 + v0.1（2026/10/27）:
+L7 多角色情绪感染 v0 + v0.1 + v0.2（2026/10/27）:
   - contagion.py：A 的四维 Appraisal → B 的有界 appraisal 先验
   - tick(contagion_bias=...) 在记忆先验之后、appraise 之前叠加
   - v0：ContagionPair 先 tick A 再 tick B；默认关闭，旧路径逐位不变
   - v0.1：strength 关系强度 + tick_bidirectional 双向（先算两侧偏置再 tick）
+  - v0.2：relationship_strength() 从 trust / love 自动推导 strength
   - 详细记录见 docs/L7_MULTI_CHARACTER.md
 
 v0.3 核心变更:

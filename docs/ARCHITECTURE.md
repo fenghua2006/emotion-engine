@@ -116,6 +116,8 @@ python scripts/generate_l5_tolerance_golden.py --legacy --check
   `scars` / `tolerance`；共享只读 `Personality` 允许。
 - `strength` 是关系强度乘数：`effective_gain = gain * strength`，
   限制在 `[0, 1]`；`strength=0` 等价于关闭感染。
+- `relationship_strength()` / `auto_strength=True`：从双方 `state.trust` /
+  `state.love` 推导强度；自动模式在每次 `derive()` 前刷新，仍受 `cap` 限制。
 - `tick_bidirectional()` 从双方本轮的输入 appraisal 先算出两个方向的偏置，
   再 tick A、B；没有同 tick 反馈环，结果与 tick 顺序无关。
 - 默认路径不新增 result / trace 键；只有感染实际运行时才追加

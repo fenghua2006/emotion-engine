@@ -164,24 +164,26 @@
 - 53 个 L6 测试；全量 338 tests OK；ruff clean；六套 golden 无 diff
 - 详细契约见 `docs/JEV.md` / `docs/MCP.md`
 
-## v0.8 ✅ — 多角色交互（L7 v0 + v0.1 双向）
+## v0.8 ✅ — 多角色交互（L7 v0 + v0.1 双向 + v0.2 自动关系）
 - `contagion.py`：情绪感染，A 的 `Appraisal` → B 的有界 appraisal 先验
 - 只传四维：`goal_conduciveness` / `expectedness` / `coping_potential` /
   `social_evaluation`；不传 `goal_relevance` / `other_agency`
 - `gain` 默认 0.2，单维 `cap` 默认 0.08、绝对上限 0.2；中性源不触发
 - L7.1 `strength`：`effective_gain = gain * strength`，默认 1.0，范围 [0, 1]；
   `strength=0` 等价于关闭感染
+- L7.2 自动关系模型：`relationship_strength()` 从 trust / love 推导强度，
+  `ContagionPair.from_relationship()` / `auto_strength=True` 每次 derive 前刷新
 - `engine.tick(contagion_bias=...)` 插在 L4 记忆先验之后、`appraise()` 之前；
   默认路径的 result / trace 键集合不变
 - `ContagionPair`：`tick_pair()` 单向 A→B，`tick_bidirectional()` 双向 A↔B；
   双向先算双方输入偏置再 tick，顺序无关、无同 tick 反馈环
 - 拒绝同一引擎或共享 `state` / `memory` / `scars` / `tolerance`
 - 感染不写状态、记忆、`Personality`、快照或 MCP；schema 版本不变
-- 41 个 L7 测试（27 v0 + 14 双向 / 强度）；全量 379 tests OK；ruff clean；
-  六套 golden 无 diff
-- 演示：`python scripts/multi_character_demo.py [--bidirectional --strength 0.5]`
+- 55 个 L7 测试（27 v0 + 14 双向 / 强度 + 14 自动关系）；全量 393 tests OK；
+  ruff clean；六套 golden 无 diff
+- 演示：`python scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`
 - 详细设计见 `docs/L7_MULTI_CHARACTER.md`
-- 仍未做：自动关系强度模型、群体传播 / 衰减网络
+- 仍未做：方向性关系模型、群体传播 / 衰减网络
 
 ## v0.9 — 角色市场
 - 社区贡献蒸馏配方

@@ -7,6 +7,7 @@
     python scripts/multi_character_demo.py
     python scripts/multi_character_demo.py --gain 0.3 --cap 0.1
     python scripts/multi_character_demo.py --bidirectional --strength 0.5
+    python scripts/multi_character_demo.py --auto-strength --bidirectional
 """
 
 from __future__ import annotations
@@ -37,10 +38,17 @@ NOW = 1_800_000_000.0
 CHANNELS = ("joy", "sadness", "fear", "trust")
 
 
-def make_engine(personality: Personality) -> EmotionEngine:
+def make_engine(
+    personality: Personality,
+    *,
+    trust: float = 0.25,
+    love: float = 0.2,
+) -> EmotionEngine:
     state = EmotionalState()
     for channel, value in personality.baseline().items():
         setattr(state, channel.value, value)
+    state.trust = trust
+    state.love = love
     state._last_update = NOW
     return EmotionEngine(
         state=state,
@@ -78,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--bidirectional", action="store_true",
         help="run A <-> B instead of one-way A -> B",
     )
+    parser.add_argument(
+        "--auto-strength", action="store_true",
+        help="derive strength from both engines' trust / love",
+    )
     return parser
 
 
@@ -94,13 +106,24 @@ def main() -> int:
         agreeableness=0.8, neuroticism=0.45,
     )
 
-    source = make_engine(source_personality)
-    target = make_engine(target_personality)
-    control = make_engine(target_personality)
-    source_control = make_engine(source_personality)
+    source_trust, source_love = (0.8, 1.2) if args.auto_strength else (0.25, 0.2)
+    target_trust, target_love = (0.5, 0.6) if args.auto_strength else (0.25, 0.2)
+    source = make_engine(
+        source_personality, trust=source_trust, love=source_love,
+    )
+    target = make_engine(
+        target_personality, trust=target_trust, love=target_love,
+    )
+    control = make_engine(
+        target_personality, trust=target_trust, love=target_love,
+    )
+    source_control = make_engine(
+        source_personality, trust=source_trust, love=source_love,
+    )
     pair = ContagionPair(
         source, target,
         gain=args.gain, cap=args.cap, strength=args.strength,
+        auto_strength=args.auto_strength,
     )
 
     # A 被当众否定；B 只是旁观者，自己的评估没有 A 那么负面。
@@ -132,7 +155,8 @@ def main() -> int:
         print("A: 高外向 / 高神经质；B: 内向 / 高宜人")
         print(
             f"gain={pair.gain:.3f}  strength={pair.strength:.3f}  "
-            f"effective_gain={pair.effective_gain:.3f}  cap={pair.cap:.3f}"
+            f"effective_gain={pair.effective_gain:.3f}  cap={pair.cap:.3f}  "
+            f"mode={'auto' if pair.auto_strength else 'explicit'}"
         )
         print()
         show_state("A alone (control)", source_control_result)
