@@ -1,8 +1,8 @@
 # 忍耐空间 / 耐受窗（Tolerance Window）
 
-> v0.7 控制层 + L5 校准核心（2026-10-26）。代码：`tolerance.py`；集成：`engine.py`；
-> 测试：`test_tolerance.py`、`test_engine_tolerance.py`、`test_l5_tolerance.py`；
-> golden：`fixtures/l5_tolerance_golden.json` / `..._legacy.json`。
+> v0.7 控制层 + L5 校准核心 + L5.1 表达/仪表盘（2026-10-26）。代码：`tolerance.py`；集成：`engine.py`；
+> 测试：`test_tolerance.py`、`test_engine_tolerance.py`、`test_l5_tolerance.py`、
+> `test_l5_1_expression_dashboard.py`；golden：`fixtures/l5_tolerance_golden.json` / `..._legacy.json`。
 
 ## 1. 为什么不是“情绪值更高”
 
@@ -309,19 +309,84 @@ meta state、profile、`meta_emotion_enabled` 与 `tolerance_meta_load_enabled`
 - 伤疤压缩 capacity、meta 增加 load，两者可以共存，但不重复计同一来源；
 - 快照不保存 meta state、profile 或 enable 开关，恢复后需重新配置。
 
-## 7. 与表达层
+## 7. 与表达层（L5.1）
 
-- `respond()` 的 `action` 会参考 zone：hyper 压低趋近、放大回避；hypo 压低趋近。
-- `_mood_hint()` 会把 zone 翻成行为指令，而不是把数值丢给 LLM：
-  - hyper：“容易战或逃，语气更冲、更防御，很难继续忍耐”
-  - hypo：“反应变慢、想关机、话变少，这不是平静”
-- 数值本身只保留在调试输出里，不作为 prompt 的主要表达。
+L5.1 让本地模板、Live2D 参数与行为倾向使用同一个 zone；`regulated`
+路径保持 L5 之前的表达式与模板选择不变。
+
+### 7.1 本地模板
+
+- `regulated`：仍按主导情绪从 `_CHARACTER_POOLS` 选台词。
+- `hyper` / `hypo`：zone 优先，从角色专属 `_ZONE_POOLS` 选台词；
+  未注册角色回退 `default`。
+- hyper 使用战/逃、拒绝、防御性短句；hypo 使用话少、迟缓、关机的短句。
+- `respond()` 在 hyper / hypo 下把 `needs_llm` 置为 `True`，允许 LLM
+  在不改变数值的前提下细化表达；没有 API 时仍用本地 zone 模板。
+
+### 7.2 Live2D 表情
+
+`_expression_params(state, zone)` 先计算原映射：
+
+```text
+brow = -0.5 + joy·0.8 − sadness·0.6
+mouth = -0.3 + joy·0.7 − anger·0.3
+eye = 0.8 + surprise·0.4 − fear·0.1
+blush = min(1, joy·0.4 + guilt·0.3)
+gaze = longing·0.5 − fear·0.3
+head = sadness·0.3 + guilt·0.2
+```
+
+再按 zone 叠加：
+
+| 参数 | hyper | hypo |
+|---|---|---|
+| brow | −0.15 | ×0.55 − 0.18 |
+| mouth | −0.20 | ×0.45 − 0.10 |
+| eye | +0.15 | ×0.62 |
+| blush | ×0.55 | ×0.35 |
+| gaze | −0.20 | ×0.45 |
+| head | 不变 | ×0.60 + 0.10 |
+
+hyper / hypo 的最终六个参数 clamp 到 `[-1, 1]`；regulated 不 clamp、
+不叠加修正，逐值保持旧映射。效果上 hyper 是紧张防御脸，hypo 是低唤醒关机脸。
+
+### 7.3 行为倾向
+
+`_action_tendency()` 仍输出 `approach / withdraw / still`：
+
+- atmos > 0.3 时 `avoid ×1.3`；
+- hyper：`approach ×0.85`、`avoid ×1.25`；
+- hypo：`approach ×0.60`、`avoid ×0.55`，方向阈值从 `1.2` 提高到 `1.35`。
+
+hypo 不再只压低趋近、保留完整回避；趋近与回避都迟缓，同等冲突更容易
+落到 `still`，只有压倒性的回避才保持 `withdraw`。
+
+### 7.4 LLM 提示
+
+`_mood_hint()` 继续把 zone 翻成行为指令，而不是把数值丢给 LLM：
+
+- hyper：“容易战或逃，语气更冲、更防御，很难继续忍耐”
+- hypo：“反应变慢、想关机、话变少，这不是平静”
+
+### 7.5 仪表盘
+
+`dashboard/index.html` 新增耐受窗卡片：
+
+- `load` / `capacity` 实线；
+- anger / fear / intimacy / criticism 四条虚线容量；
+- 每个历史点按其 `zone` 绘制背景区间带：regulated 绿、hyper 红、hypo 蓝；
+- 当前 zone 徽标、load / capacity / overload_ratio 与四域读数；
+- 图例支持逐条隐藏；角色切换 / 重置时曲线清空。
+
+后端 `/api/state` 写入历史时使用 `tolerance_history_point()`，保留
+`load`、`capacity`、`zone`、`overload_ratio`、`capacity_by_domain`；
+`/api/history` 直接返回这些点。scalar / 旧历史点没有四域时，前端显示 `—`。
 
 ## 8. 测试
 
 ```bash
 python -m unittest test_tolerance.py test_engine_tolerance.py -v
-python -m unittest test_l5_tolerance.py -v
+python -m unittest test_l5_tolerance.py test_l5_1_expression_dashboard.py -v
 
 python scripts/generate_l5_tolerance_golden.py --check
 python scripts/generate_l5_tolerance_golden.py --legacy --check
@@ -342,11 +407,13 @@ python scripts/generate_l5_tolerance_golden.py --legacy --check
 - `tolerance.py` AST 导入边界
 - 既有基线：负荷≈0、慢通道不重复计负荷、hyper/hypo、模式倍率、
   冲击/边界附加、引擎 tick / prompt / respond / 可注入时钟
+- L5.1：regulated 表情逐值不变；hyper 紧张、hypo 低唤醒；hypo 行为
+  不再放大回避；zone 模板优先；仪表盘历史点与四域序列字段完整
 
-L5 验收结果：
+验收结果：
 
 ```text
-38 L5 tests, OK；全套 229 tests, OK
+L5 38 tests + L5.1 12 tests, OK；全套 241 tests, OK
 golden: 15 scenarios / 41 steps（current + legacy）
 calm current: capacity 0.862350
   domains anger 0.832 / fear 0.878 / intimacy 0.865 / criticism 0.8735
@@ -357,6 +424,7 @@ recovery: hyper → 4h 衰减 → pending → regulated
 scar social_hurt 0.6: anger/fear/criticism −0.12，intimacy 不变
 capacities: floor 0.35 / ceiling 1.80
 meta bias 0.05/0.20/0.50 → load +0.05/+0.20/+0.20
+L5.1: regulated 表情映射保持旧值；hyper/hypo 输出 clamp 到 [-1,1]
 ```
 
 ## 9. 已知限制
@@ -364,7 +432,8 @@ meta bias 0.05/0.20/0.50 → load +0.05/+0.20/+0.20
 - 四域容量仍是**手调系数 + golden 锁定**，不是从数据学习出的参数。
 - 伤疤同域取 max，不累加；跨域的长期扩散（一个伤疤逐渐影响全部域）尚未实现。
 - 长期压力导致的基线容量下降（人格慢漂移）尚未接入。
-- 仪表盘还没有 tolerance 折线/区间带，也没有四域容量展示。
-- hyper / hypo 的本地表达模板、Live2D 与 `_action_tendency` 一致性尚未校准；
-  L5.1 再处理表达层一致性。
+- L5.1 的表情修正系数是手工规则，只锁定方向和边界，尚未做真实 Live2D
+  观感 A/B；hyper / hypo 台词每角色仅 3 条，长期会重复。
+- 仪表盘只在 `/api/state` 轮询时累积点；`/api/event` 返回的状态会即时
+  绘图，但不回写服务端历史。历史数组上限 300 点，前端显示 120 点。
 - meta load 默认关闭，且只有 `multi + 非 legacy` 才消费；尚未做长期 A/B 曲线。

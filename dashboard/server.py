@@ -310,6 +310,17 @@ _BUILTIN_DESCS = {
 }
 
 
+def tolerance_history_point(data: dict) -> dict:
+    """把 /api/state 响应压成历史点，保留耐受窗曲线所需字段。"""
+    tolerance = dict(data.get("tolerance") or {})
+    return {
+        "t": data["timestamp"],
+        "felt": dict(data["felt"]),
+        "atmosphere": data["atmosphere"],
+        "tolerance": tolerance,
+    }
+
+
 def build_state_response() -> dict:
     engine = _state["engine"]
     s = engine.state
@@ -390,11 +401,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with _lock:
                 data = build_state_response()
             hist = _state["history"]
-            hist.append({
-                "t": data["timestamp"],
-                "felt": data["felt"],
-                "atmosphere": data["atmosphere"],
-            })
+            hist.append(tolerance_history_point(data))
             if len(hist) > MAX_HISTORY:
                 hist.pop(0)
             self._send_json(data)

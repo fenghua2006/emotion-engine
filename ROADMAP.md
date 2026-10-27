@@ -127,17 +127,18 @@
   `fixtures/l5_tolerance_golden*.json` 双 golden
 - `ToleranceConfig` / `ToleranceState` 新字段与序列化；快照保存
   `legacy_tolerance` 与 multi 观测键，配置不持久化
-- 38 个 L5 测试；全量 229 tests OK；L1/L2 四套 golden 无 diff
+- 38 个 L5 测试；L5.1 追加 12 个，全量 241 tests OK；L1/L2 四套 golden 无 diff
 - calm capacity current 0.862350 / legacy 0.857500；hyper / hypo / 滞回 /
   capacity 上下界 / fuzz 全部锁定
-- 留到 L5.1：仪表盘 tolerance 区间带与四域折线、hyper/hypo 表达一致性
+- L5.1 ✅：仪表盘 tolerance 区间带、load/capacity、四域折线；
+  hyper/hypo 本地模板、Live2D 与 `_action_tendency` 表达一致性
 - 详细设计见 `docs/TOLERANCE.md`
 
 ## v0.7 — MCP 封装（进行中）
 - Claude Code / Codex 直接调引擎
 - /emotion tick / /emotion recall
 - 记忆系统接入 appraisal / 自动关系摘要
-- 仪表盘展示 tolerance 区间带
+- 仪表盘展示 StepTrace（tolerance 区间带已在 L5.1 完成）
 
 ## v0.8 — 多角色交互
 - 两个 EmotionEngine 实例间的情绪感染

@@ -34,6 +34,7 @@ main {
   padding:16px 24px; flex:1; overflow:hidden;
 }
 #bars-card { flex-shrink:0; }
+#tolerance-card { flex-shrink:0; padding-bottom:8px; }
 #chart-card { flex:1; min-height:0; }
 /* ═══ 情绪卡片 ═══ */
 .card {
@@ -100,21 +101,47 @@ main {
 #chart-wrapper { min-height:250px; position:relative; }
 #history-chart { width:100% !important; }
 
+/* ═══ 耐受窗 ═══ */
+#tolerance-header {
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  margin-bottom:4px;
+}
+#tolerance-header .card-title { margin-bottom:0; }
+#tol-readout, #tol-domains {
+  font-size:10px; color:#777; font-variant-numeric:tabular-nums;
+}
+#tol-readout b, #tol-domains b {
+  color:#bbb; font-weight:600;
+}
+#tol-domains {
+  margin-left:auto; display:flex; gap:10px; flex-wrap:wrap;
+}
+.zone-badge {
+  font-size:10px; padding:2px 9px; border-radius:10px; font-weight:600;
+  border:1px solid transparent;
+}
+.zone-regulated { background:#15301c; color:#61d77f; border-color:#245533; }
+.zone-hyper { background:#3a1715; color:#ff7a68; border-color:#65302a; }
+.zone-hypo { background:#152a3a; color:#72b7e8; border-color:#2a4c66; }
+#tolerance-chart-wrapper { height:150px; position:relative; }
+#tolerance-chart { width:100% !important; }
+
 /* 自定义图例——可滑动 */
-#custom-legend {
-  display:flex; flex-wrap:wrap; gap:4px 12px; padding:8px 0;
+#custom-legend, #tolerance-legend {
+  display:flex; flex-wrap:wrap; gap:4px 12px; padding:8px 0 0;
   font-size:10px; user-select:none;
 }
-#custom-legend .leg-item {
+#custom-legend .leg-item, #tolerance-legend .leg-item {
   display:flex; align-items:center; gap:3px; cursor:pointer;
   padding:2px 6px; border-radius:4px; transition:0.15s;
 }
-#custom-legend .leg-item:hover { background:#2a2a38; }
-#custom-legend .leg-dot {
+#custom-legend .leg-item:hover, #tolerance-legend .leg-item:hover { background:#2a2a38; }
+#custom-legend .leg-dot, #tolerance-legend .leg-dot {
   width:8px; height:8px; border-radius:50%; flex-shrink:0;
 }
-#custom-legend .leg-text { color:#888; }
-#custom-legend .leg-item.dimmed .leg-text { color:#444; }
+#custom-legend .leg-text, #tolerance-legend .leg-text { color:#888; }
+#custom-legend .leg-item.dimmed .leg-text,
+#tolerance-legend .leg-item.dimmed .leg-text { color:#444; }
 
 /* ═══ dominant ═══ */
 #dominant-display {
@@ -287,6 +314,23 @@ footer {
     </div>
   </div>
 
+  <!-- 耐受窗 -->
+  <div class="card" id="tolerance-card">
+    <div id="tolerance-header">
+      <div class="card-title">🛡️ 耐受窗 · load / capacity / 四域容量</div>
+      <span id="tol-zone" class="zone-badge zone-regulated">regulated</span>
+      <span id="tol-readout">load <b id="tol-load">—</b> / cap <b id="tol-capacity">—</b> · ratio <b id="tol-ratio">—</b></span>
+      <span id="tol-domains">
+        <span>怒 <b id="tol-domain-anger">—</b></span>
+        <span>惧 <b id="tol-domain-fear">—</b></span>
+        <span>亲 <b id="tol-domain-intimacy">—</b></span>
+        <span>批 <b id="tol-domain-criticism">—</b></span>
+      </span>
+    </div>
+    <div id="tolerance-chart-wrapper"><canvas id="tolerance-chart"></canvas></div>
+    <div id="tolerance-legend"></div>
+  </div>
+
   <!-- 折线图 -->
   <div class="card" id="chart-card">
     <div class="card-title">📈 情绪走势 · felt 值历史（可滑动）</div>
@@ -343,6 +387,27 @@ const CH_COLORS = {
 };
 
 // ═══════════════════════════════════════════════
+// 耐受窗图表常量
+// ═══════════════════════════════════════════════
+const TOL_DOMAINS = ["anger","fear","intimacy","criticism"];
+const TOL_DOMAIN_NAMES = {
+  anger:"愤怒容量", fear:"恐惧容量", intimacy:"亲密容量", criticism:"批评容量"
+};
+const TOL_DOMAIN_COLORS = {
+  anger:"#ff6b5a", fear:"#b87cd4", intimacy:"#ff77a9", criticism:"#5ee0c4"
+};
+const TOL_ZONE_COLORS = {
+  regulated:"rgba(97,215,127,0.055)",
+  hyper:"rgba(255,107,90,0.13)",
+  hypo:"rgba(114,183,232,0.14)"
+};
+const TOL_ZONE_NAMES = {
+  regulated:"regulated · 可调节",
+  hyper:"hyper · 战/逃",
+  hypo:"hypo · 关机"
+};
+
+// ═══════════════════════════════════════════════
 // 初始化情绪条
 // ═══════════════════════════════════════════════
 const grid = document.getElementById("bars-grid");
@@ -391,6 +456,85 @@ const chart = new Chart(ctx, {
     id: 'customLegend',
     afterUpdate(chart) { buildCustomLegend(chart); }
   }]
+});
+
+// ═══════════════════════════════════════════════
+// 耐受窗图表：区间带 + load/capacity + 四域
+// ═══════════════════════════════════════════════
+let toleranceZones = [];
+const toleranceZoneBandPlugin = {
+  id: "toleranceZoneBands",
+  beforeDatasetsDraw(chart) {
+    const area = chart.chartArea;
+    const points = chart.getDatasetMeta(0).data || [];
+    if (!area || !toleranceZones.length || !points.length) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.left, area.top, area.width, area.height);
+    ctx.clip();
+    toleranceZones.forEach((zone, i) => {
+      const point = points[i];
+      if (!point) return;
+      const prev = points[i - 1] || point;
+      const next = points[i + 1] || point;
+      const left = points.length === 1 ? point.x - 6 : (i === 0 ? point.x - (next.x - point.x) / 2 : (prev.x + point.x) / 2);
+      const right = points.length === 1 ? point.x + 6 : (i === points.length - 1 ? point.x + (point.x - prev.x) / 2 : (point.x + next.x) / 2);
+      ctx.fillStyle = TOL_ZONE_COLORS[zone] || TOL_ZONE_COLORS.regulated;
+      ctx.fillRect(left, area.top, Math.max(0, right - left), area.height);
+    });
+    ctx.restore();
+  }
+};
+
+const tolCtx = document.getElementById("tolerance-chart").getContext("2d");
+const toleranceChart = new Chart(tolCtx, {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: "load", data: [], borderColor: "#ff9f43",
+        backgroundColor: "#ff9f4322", borderWidth: 2,
+        pointRadius: 0, tension: 0.25, fill: false,
+      },
+      {
+        label: "capacity", data: [], borderColor: "#c8c0ff",
+        backgroundColor: "#c8c0ff22", borderWidth: 2,
+        pointRadius: 0, tension: 0.25, fill: false,
+      },
+      ...TOL_DOMAINS.map(domain => ({
+        label: TOL_DOMAIN_NAMES[domain], data: [],
+        borderColor: TOL_DOMAIN_COLORS[domain],
+        backgroundColor: "transparent", borderWidth: 1.25,
+        borderDash: [3, 3], pointRadius: 0, tension: 0.25, fill: false,
+      }))
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        min: 0, suggestedMax: 1.8, grace: "8%",
+        ticks: {
+          color: "#555", font: { size: 10 },
+          callback: v => Number(v).toFixed(2)
+        },
+        grid: { color: "#1a1a2a" }
+      }
+    }
+  },
+  plugins: [
+    toleranceZoneBandPlugin,
+    {
+      id: "toleranceLegend",
+      afterUpdate(chart) { buildToleranceLegend(chart); }
+    }
+  ]
 });
 
 // ═══════════════════════════════════════════════
@@ -475,6 +619,52 @@ function toggleDataset(i) {
 }
 window.toggleDataset = toggleDataset;
 
+function buildToleranceLegend(chart) {
+  const container = document.getElementById("tolerance-legend");
+  if (!container) return;
+  let html = "";
+  chart.data.datasets.forEach((ds, i) => {
+    const visible = chart.isDatasetVisible(i);
+    html += `<span class="leg-item${visible ? "" : " dimmed"}" onclick="toggleToleranceDataset(${i})">
+      <span class="leg-dot" style="background:${ds.borderColor}"></span>
+      <span class="leg-text">${ds.label}</span>
+    </span>`;
+  });
+  container.innerHTML = html;
+}
+
+function toggleToleranceDataset(i) {
+  const vis = toleranceChart.isDatasetVisible(i);
+  toleranceChart.setDatasetVisibility(i, !vis);
+  toleranceChart.update("none");
+  buildToleranceLegend(toleranceChart);
+}
+window.toggleToleranceDataset = toggleToleranceDataset;
+
+function clearToleranceChart() {
+  toleranceChart.data.labels = [];
+  toleranceChart.data.datasets.forEach(ds => ds.data = []);
+  toleranceZones = [];
+  toleranceChart.update("none");
+}
+
+function updateToleranceReadout(tolerance) {
+  const zone = tolerance.zone || "regulated";
+  const badge = document.getElementById("tol-zone");
+  badge.textContent = TOL_ZONE_NAMES[zone] || zone;
+  badge.className = "zone-badge zone-" + (TOL_ZONE_NAMES[zone] ? zone : "regulated");
+
+  document.getElementById("tol-load").textContent = Number(tolerance.load || 0).toFixed(3);
+  document.getElementById("tol-capacity").textContent = Number(tolerance.capacity || 0).toFixed(3);
+  document.getElementById("tol-ratio").textContent = Number(tolerance.overload_ratio || 0).toFixed(2);
+
+  const domains = tolerance.capacity_by_domain || {};
+  TOL_DOMAINS.forEach(domain => {
+    const el = document.getElementById("tol-domain-" + domain);
+    if (el) el.textContent = domains[domain] == null ? "—" : Number(domains[domain]).toFixed(3);
+  });
+}
+
 // ═══════════════════════════════════════════════
 // 数据拉取
 // ═══════════════════════════════════════════════
@@ -551,8 +741,11 @@ function updateUI(data) {
     scarDiv.innerHTML = "";
   }
 
-  // 折线图——追加数据点
+  // 耐受窗：当前读数 + 曲线
+  const tol = data.tolerance || {};
+  updateToleranceReadout(tol);
   const label = new Date(data.timestamp*1000).toLocaleTimeString("zh-CN");
+
   chart.data.labels.push(label);
   CHANNELS.forEach((ch,i) => {
     chart.data.datasets[i].data.push(felt[ch]||0);
@@ -562,6 +755,24 @@ function updateUI(data) {
     chart.data.datasets.forEach(ds => ds.data.shift());
   }
   chart.update("none");
+
+  const domains = tol.capacity_by_domain || {};
+  toleranceChart.data.labels.push(label);
+  toleranceChart.data.datasets[0].data.push(Number(tol.load || 0));
+  toleranceChart.data.datasets[1].data.push(Number(tol.capacity || 0));
+  TOL_DOMAINS.forEach((domain, i) => {
+    const value = domains[domain];
+    toleranceChart.data.datasets[2 + i].data.push(
+      value == null ? null : Number(value)
+    );
+  });
+  toleranceZones.push(tol.zone || "regulated");
+  if (toleranceChart.data.labels.length > MAX_LABELS) {
+    toleranceChart.data.labels.shift();
+    toleranceChart.data.datasets.forEach(ds => ds.data.shift());
+    toleranceZones.shift();
+  }
+  toleranceChart.update("none");
 }
 
 // ═══════════════════════════════════════════════
@@ -652,6 +863,7 @@ async function createCustomChar() {
     chart.data.labels = [];
     chart.data.datasets.forEach(ds => ds.data = []);
     chart.update();
+    clearToleranceChart();
     if (data.state) updateUI(data.state);
     document.getElementById("char-name").textContent = name;
     showToast("角色已创建: " + name);
@@ -726,6 +938,7 @@ async function resetEngine() {
   chart.data.labels = [];
   chart.data.datasets.forEach(ds => ds.data = []);
   chart.update();
+  clearToleranceChart();
   showToast("已重置");
 }
 
@@ -739,6 +952,7 @@ async function switchCharacter() {
   chart.data.labels = [];
   chart.data.datasets.forEach(ds => ds.data = []);
   chart.update();
+  clearToleranceChart();
   if (data.state) updateUI(data.state);
   showToast("已切换: " + data.character);
 }

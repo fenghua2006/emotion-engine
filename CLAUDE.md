@@ -40,9 +40,9 @@ python -m unittest test_l1_fast_channels.py test_interaction_activation.py -v
 python -m unittest test_l2_slow_channels.py -v
 python -m unittest test_l3_atmosphere_scars.py -v
 python -m unittest test_l3_5_meta_emotion.py -v
-python -m unittest test_l5_tolerance.py -v
+python -m unittest test_l5_tolerance.py test_l5_1_expression_dashboard.py -v
 
-# Full suite (229 tests)
+# Full suite (241 tests)
 python -m unittest discover
 
 # L1 golden generation / verification
@@ -130,7 +130,7 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
 - Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38 tests and full suite is 229. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38 tests, L5.1 adds 12, and the full suite is 241. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
 
 ### Tolerance calibration (L5 v0)
 
@@ -141,6 +141,14 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `EmotionEngine` fields: `tolerance_config=None`, `legacy_tolerance=False`, `tolerance_meta_load_enabled=False`.
 - Snapshots persist `legacy_tolerance` plus multi observation keys (`capacity_model`, `capacity_by_domain`, `meta_load_bias`); `ToleranceConfig` is code-level and must be re-supplied for exact resume.
 - L5 golden: 15 scenarios / 41 steps; `scripts/generate_l5_tolerance_golden.py` (`--check`, `--legacy`). Details: `docs/TOLERANCE.md`.
+
+### Expression + dashboard consistency (L5.1)
+
+- `_ZONE_POOLS` gives each character hyper/hypo local lines; `respond()` uses the zone pool instead of the dominant-emotion pool when overloaded. `regulated` still uses `_CHARACTER_POOLS`.
+- `_expression_params(state, zone)` preserves the original Live2D mapping for `regulated`; hyper tightens brows/mouth, widens eyes, and suppresses blush/gaze; hypo flattens amplitude, half-closes eyes, and droops the head. Hyper/hypo outputs are clamped to `[-1, 1]`.
+- `_action_tendency()` hypo now reduces both approach (`×0.60`) and avoidance (`×0.55`) with a wider `1.35` dominance margin; hyper keeps `×0.85 / ×1.25`. Overloaded `respond()` also sets `needs_llm=True`.
+- Dashboard tolerance card: zone background bands, load/capacity lines, four domain capacity lines, current zone/readouts, togglable legend. `/api/state` history points now store the full tolerance dict; `tolerance_history_point()` is the pure helper.
+- Tests: `test_l5_1_expression_dashboard.py` (12 tests). Details: `docs/TOLERANCE.md` §7.
 
 ### Core data flow
 
@@ -213,7 +221,8 @@ Two systems coexist:
 
 `dashboard/server.py` — stdlib HTTP server. `dashboard/index.html` — Chart.js-based SPA.
 - `GET /api/state` — full state JSON (10 channels felt+raw, atmosphere, tolerance, dominant, memory stats, scars)
-- `GET /api/history?n=120` — recent data points for the line chart
+- `GET /api/history?n=120` — recent data points for the line charts; each point includes `tolerance` (`load`, `capacity`, `zone`, `overload_ratio`, `capacity_by_domain`)
+- Tolerance card draws zone bands + load/capacity + four-domain capacity lines; the emotion chart remains separate.
 - `POST /api/event {"text":"..."}` — feed event text, engine ticks, returns utterance+state
 - `POST /api/switch {"character":"kokomi"}` — hot-swap character at runtime
 - `POST /api/reset` — reset current character to baseline

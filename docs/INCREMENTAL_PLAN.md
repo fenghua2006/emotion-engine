@@ -16,7 +16,7 @@
 | **L3** | 氛围与伤疤 | ✅ 2026-10-26 | 顺序修正可 A/B；shock 密度非零；伤疤三通道 ≤60%；166 tests |
 | **L3.5** | 元情绪：二阶评估与调节意图 | ✅ 2026-10-26（v0 trace-only） | 不新增通道；关闭时四套 golden 与 L3 A/B 不变；191 tests |
 | **L4** | 关系域记忆 | ⏳ | 记忆不写 Personality；预算可控 |
-| **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0；L5.1 待办） | 双 golden；四域容量；229 tests |
+| **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0 + L5.1） | 双 golden；四域容量；241 tests |
 | **L6** | 表达 / LLM / JEV / MCP | ⏳ | 全链路可回退、可观测 |
 
 ## L0：核心情绪线 ✅
@@ -321,7 +321,7 @@ L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
 验收结果：
 
 ```text
-38 L5 tests, OK；全套 229 tests, OK
+38 L5 tests, OK；L5.1 追加 12 tests；全套 241 tests, OK
 两套 golden 通过；L1/L2 四套 golden 无 diff
 calm current capacity 0.862350；legacy 0.857500
 anger_hyper: 1 tick pending → 2 tick hyper
@@ -333,13 +333,18 @@ meta bias 0.05/0.20/0.50 → +0.05/+0.20/+0.20
 fuzz 500 组：有限、[0.35,1.80]、[0,3]、合法 zone
 ```
 
-不做 / 留到 L5.1：
+L5.1 ✅ 已补（表达 / 仪表盘）：
 
 - 仪表盘 tolerance 区间带、load / capacity / 四域折线；
 - hyper / hypo 本地表达模板、Live2D 与 `_action_tendency` 一致性；
+- `regulated` 的表情映射保持逐值不变，新修正只作用于 hyper / hypo；
+- 12 个 L5.1 测试，全量 241 tests OK。
+
+仍未做：
+
 - 长期压力导致的基线容量慢漂移；
 - 伤疤跨域扩散；
-- 不改 `respond()`、模板、Live2D。
+- 真实 Live2D 观感 A/B 与更多 zone 台词。
 
 详细记录见 [`TOLERANCE.md`](TOLERANCE.md)。
 

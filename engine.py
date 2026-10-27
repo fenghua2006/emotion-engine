@@ -1269,19 +1269,26 @@ class MemoryStore:
 # 行为倾向映射
 def _action_tendency(state: "EmotionalState", atmos: float,
                      zone: str = "regulated") -> str:
-    """从情绪状态推导行为倾向——趋近 or 回避 or 防御"""
+    """从情绪状态推导行为倾向——趋近 or 回避 or 防御。
+
+    L5.1：hypo 是关机而非“更强烈的回避”。趋近和回避都被压低，
+    方向判定也更钝，因此同等强度的冲突更容易落到 still。
+    """
     approach = state.joy + state.trust + state.love
     avoid    = state.fear + state.sadness + state.disgust
+    dominance_ratio = 1.2
     if atmos > 0.3:
         avoid *= 1.3  # 紧绷氛围放大回避
     if zone == ZONE_HYPER:
         approach *= 0.85  # 过载时战/逃，趋近冲动下降
         avoid *= 1.25
     elif zone == ZONE_HYPO:
-        approach *= 0.75  # 关机状态，连回避都变得迟缓
-    if approach > avoid * 1.2:
+        approach *= 0.60  # 关机：趋近与回避都迟缓
+        avoid *= 0.55
+        dominance_ratio = 1.35
+    if approach > avoid * dominance_ratio:
         return "approach"   # 趋近——想靠近
-    elif avoid > approach * 1.2:
+    elif avoid > approach * dominance_ratio:
         return "withdraw"   # 回避——想躲
     else:
         return "still"      # 僵住——不确定
@@ -1378,6 +1385,53 @@ _CHARACTER_POOLS = {
         "neutral": ["嗯。", "……", "好。"],
     },
 }
+
+# L5.1：超出耐受窗后，局部模板必须和 zone 一致，不能继续用平静时
+# 按主导情绪挑出的台词。hyper 是战/逃，hypo 是关机，不是“更平静”。
+_ZONE_POOLS = {
+    "kokomi": {
+        "hyper": [
+            "现在不适合继续谈。", "请退后。", "我需要重新判断局势。"
+        ],
+        "hypo": [
+            "……先到这里。", "我需要一点时间。", "……我听不清了。"
+        ],
+    },
+    "columbina": {
+        "hyper": [
+            "……别过来。", "远离我。", "……安静。"
+        ],
+        "hypo": [
+            "……", "让我安静。", "……好累。"
+        ],
+    },
+    "furina": {
+        "hyper": [
+            "别逼我。", "……我说了，够了。", "你还想怎样？！"
+        ],
+        "hypo": [
+            "……让我歇一会儿。", "我演不动了。", "……随便吧。"
+        ],
+    },
+    "default": {
+        "hyper": [
+            "别说了。", "让我一个人待着。", "我现在不想谈。"
+        ],
+        "hypo": [
+            "……", "让我静静。", "我现在不想说。"
+        ],
+    },
+}
+
+
+def _select_local_utterance(character_id: str, dominant: str, zone: str) -> str:
+    """按 zone 优先选择本地台词；只有 regulated 才按主导情绪挑。"""
+    import random
+    pool = _CHARACTER_POOLS.get(character_id, _CHARACTER_POOLS["default"])
+    if zone in (ZONE_HYPER, ZONE_HYPO):
+        zone_pool = _ZONE_POOLS.get(character_id, _ZONE_POOLS["default"])
+        return random.choice(zone_pool[zone])
+    return random.choice(pool.get(dominant, pool["neutral"]))
 
 
 # ══════════════════════════════════════════════════════
@@ -1612,46 +1666,83 @@ def _dominant_channel(state: "EmotionalState") -> str:
     return best[0] if best[1] > 0.3 else "neutral"
 
 
+def _expression_params(state: "EmotionalState", zone: str = "regulated") -> Dict[str, float]:
+    """Live2D 表情映射。regulated 保持原曲线，hyper/hypo 叠加一致性修正。
+
+    hyper：紧张防御——眉压更低、嘴更收紧、眼睛睁大、目光回避、脸红受抑。
+    hypo：低唤醒关机——整体幅度压平，眼睛半闭、目光下垂、头微垂。
+    """
+    brow = -0.5 + state.joy * 0.8 - state.sadness * 0.6
+    mouth = -0.3 + state.joy * 0.7 - state.anger * 0.3
+    eye = 0.8 + state.surprise * 0.4 - state.fear * 0.1
+    blush = min(1.0, state.joy * 0.4 + state.guilt * 0.3)
+    gaze = state.longing * 0.5 - state.fear * 0.3
+    head = state.sadness * 0.3 + state.guilt * 0.2
+
+    if zone == ZONE_HYPER:
+        brow -= 0.15
+        mouth -= 0.20
+        eye += 0.15
+        blush *= 0.55
+        gaze -= 0.20
+    elif zone == ZONE_HYPO:
+        brow = brow * 0.55 - 0.18
+        mouth = mouth * 0.45 - 0.10
+        eye *= 0.62
+        blush *= 0.35
+        gaze *= 0.45
+        head = head * 0.60 + 0.10
+
+    values = {
+        "brow_angle": brow,
+        "mouth_curve": mouth,
+        "eye_open": eye,
+        "blush": blush,
+        "gaze_direction": gaze,
+        "head_tilt": head,
+    }
+    if zone in (ZONE_HYPER, ZONE_HYPO):
+        values = {
+            key: max(-1.0, min(1.0, value))
+            for key, value in values.items()
+        }
+    return {key: round(value, 3) for key, value in values.items()}
+
+
 def respond(engine: "EmotionEngine", event_type: str,
             appraisal: Optional["Appraisal"] = None,
             character_id: str = "default") -> Dict:
     """
     纯本地计算。零 API 调用。
-    character_id: 从 _CHARACTER_POOLS 选角色专属模板。
+    character_id: 选角色专属模板；hyper/hypo 时 zone 优先于主导情绪。
     返回: 表情参数 + 行为倾向 + 简短回应 + 是否需要 LLM。
     """
     result = engine.tick(appraisal) if appraisal else engine.tick()
     s = result["state"]
     atmos = result.get("atmosphere", 0)
 
-    # 角色专属模板池
-    pool = _CHARACTER_POOLS.get(character_id, _CHARACTER_POOLS["default"])
     dom = _dominant_channel(engine.state)
-    import random
-    utterance = random.choice(pool.get(dom, pool["neutral"]))
+    tolerance = result.get("tolerance", {})
+    zone = tolerance.get("zone", "regulated")
+
+    # 角色专属模板：超载时 zone 优先于主导情绪。
+    utterance = _select_local_utterance(character_id, dom, zone)
 
     # 是否触发 LLM（只在异常状态时）
     shock_count = len(result.get("shock_channels", []))
     needs_llm = (engine.state.surprise > 0.8 or shock_count > 4 or
-                 len(result.get("blends", [])) > 2)
+                 len(result.get("blends", [])) > 2 or
+                 zone in (ZONE_HYPER, ZONE_HYPO))
 
     return {
-        # Live2D 参数映射
-        "expression": {
-            "brow_angle":     round(-0.5 + engine.state.joy * 0.8 - engine.state.sadness * 0.6, 3),
-            "mouth_curve":    round(-0.3 + engine.state.joy * 0.7 - engine.state.anger * 0.3, 3),
-            "eye_open":       round(0.8 + engine.state.surprise * 0.4 - engine.state.fear * 0.1, 3),
-            "blush":          round(min(1.0, engine.state.joy * 0.4 + engine.state.guilt * 0.3), 3),
-            "gaze_direction": round(engine.state.longing * 0.5 - engine.state.fear * 0.3, 3),
-            "head_tilt":      round(engine.state.sadness * 0.3 + engine.state.guilt * 0.2, 3),
-        },
+        # Live2D 参数映射（L5.1 起与 zone 一致）
+        "expression":      _expression_params(engine.state, zone),
         # 行为
         "action":          _action_tendency(
-            engine.state, atmos,
-            result.get("tolerance", {}).get("zone", "regulated"),
+            engine.state, atmos, zone,
         ),
         "atmosphere":      round(atmos, 3),
-        "tolerance":       result.get("tolerance", {}),
+        "tolerance":       tolerance,
         # 简短回应（模板，非 LLM）
         "utterance":       utterance,
         # 是否建议调 LLM

@@ -66,13 +66,14 @@ uv run python dashboard/server.py --char columbina
 
 # 浏览器打开 http://localhost:9020
 # 网页内可热切换角色、发送事件、查看情绪折线历史
+# 耐受窗卡片展示 load / capacity / 四域容量，并按 zone 绘制区间带
 ```
 
 API 端点（供外部接入）：
 | 端点 | 说明 |
 |---|---|
 | `GET /api/state` | 当前 10 通道 felt 值 + 氛围 + tolerance + dominant + 记忆 + 伤疤 |
-| `GET /api/history?n=120` | 最近 N 个数据点（折线图用） |
+| `GET /api/history?n=120` | 最近 N 个数据点（情绪与 tolerance 折线用；含 zone / 四域容量） |
 | `POST /api/event` `{"text":"..."}` | 发送事件，引擎 tick |
 | `POST /api/switch` `{"character":"kokomi"}` | 热切换角色 |
 
@@ -116,7 +117,7 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L5 后全量 229 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L5.1 后全量 241 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - L0–L6 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
@@ -128,7 +129,7 @@ trace = result["trace"]
 - 46 条冻结事件：角色 31 + engine demo 3 + 合成边界 12。
 - 双 golden：`fixtures/l1_golden.json`（当前）+ `l1_golden_legacy.json`（v0.7 对照），误差 < `1e-9`。
 - 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 166 tests，
-  L3.5 完成后 191 tests，L5 校准核心完成后 **229 tests, OK**。
+  L3.5 完成后 191 tests，L5 校准核心完成后 229 tests，L5.1 表达/仪表盘后 **241 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -211,7 +212,7 @@ print(result["trace"]["meta_emotions"])
   `tolerance_load_bias` 作为有界附加负荷（≤0.2）进入 tolerance；默认关闭。
 - 同一 anger 的两种二阶态度：
   `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
-- 25 个 L3.5 测试；L5 后全量 **229 tests, OK**。
+- 25 个 L3.5 测试；L5.1 后全量 **241 tests, OK**。
 - 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
@@ -271,7 +272,9 @@ print(result["tolerance"])
 - `legacy_tolerance=True`：强制 scalar + global max scar，逐值复现 pre-L5。
 - meta load 默认关闭；开启后使用上一 tick zone / overload，bias ≤0.2，不累加。
 - 快照会保存 `legacy_tolerance` 与 multi 观测字段；`ToleranceConfig` 不持久化。
-- 测试：`python -m unittest test_tolerance.py test_engine_tolerance.py test_l5_tolerance.py -v`。
+- L5.1 表达一致性：hyper 使用防御型本地台词与紧张 Live2D 表情；hypo 使用
+  关机型台词与低唤醒表情，`_action_tendency` 同时压低趋近与回避。
+- 测试：`python -m unittest test_tolerance.py test_engine_tolerance.py test_l5_tolerance.py test_l5_1_expression_dashboard.py -v`。
 - L5 golden：`python scripts/generate_l5_tolerance_golden.py --check`（legacy 加 `--legacy`）。
 - 完整公式、域系数、伤疤映射与限制：[`docs/TOLERANCE.md`](docs/TOLERANCE.md)。
 
