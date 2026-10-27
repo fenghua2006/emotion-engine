@@ -1,6 +1,6 @@
 [project]
 name = "emotion-engine"
-version = "0.7.0.dev0"
+version = "0.8.0.dev0"
 description = "Multi-channel emotion dynamics engine for AI characters and NPCs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,7 @@ ignore = ["E501"]
 branch = true
 source = [
     "atmosphere",
+    "contagion",
     "core",
     "engine",
     "expression",
@@ -56,5 +57,5 @@ omit = [
 show_missing = true
 skip_covered = true
 skip_empty = true
-# 当前基线约 86%（branch，含 L6 jev / noul / mcp_server）；先锁 80。
+# 当前基线约 86%（branch，含 L6 jev / noul / mcp_server 与 L7 contagion）；先锁 80。
 fail_under = 80

@@ -334,6 +334,6 @@ L2 没有进入 L1 参考线；L1 的 46 条事件与两套 golden 均未改变�
 - [`CORE.md`](CORE.md) — L0 纯动力学与 StepTrace
 - [`L1_FAST_CHANNELS.md`](L1_FAST_CHANNELS.md) — 六条快通道与 L1.1 修复
 - [`L3_ATMOSPHERE_SCARS.md`](L3_ATMOSPHERE_SCARS.md) — L3 氛围与伤疤
-- [`INCREMENTAL_PLAN.md`](INCREMENTAL_PLAN.md) — L0–L6 + L3.5 开发计划
+- [`INCREMENTAL_PLAN.md`](INCREMENTAL_PLAN.md) — L0–L7 + L3.5 开发计划
 - [`META_EMOTION.md`](META_EMOTION.md) — L3.5 元情绪设计与 v0 实现
 - [`../README.md`](../README.md) — 项目总览

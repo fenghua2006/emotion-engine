@@ -23,7 +23,8 @@ L0 core.py         纯公式：通道 / 衰减 / 评估 / 门控 / 交互 / 慢�
        ├── L3.5 元情绪：二阶评估 / 调节意图 / 有界偏置（见 META_EMOTION.md）
        ├── L4 关系域记忆
        ├── L5 耐受校准：四域容量 / 伤疤定向 / meta load 可选消费
-       └── L6 表达 / LLM / JEV / MCP / 仪表盘
+       ├── L6 表达 / LLM / JEV / MCP / 仪表盘
+       └── L7 多角色情绪感染：A 的 Appraisal → B 的有界先验
 ```
 
 元情绪不是 `core.py` 的新通道，而是读取 `StepTrace` 的上层。关闭时基础曲线必须完全不变。
@@ -54,7 +55,7 @@ L0 core.py         纯公式：通道 / 衰减 / 评估 / 门控 / 交互 / 慢�
 ### 上层规则
 
 - `engine.py` 负责组合，不重新定义核心公式。
-- L1–L6（含 L3.5 元情绪）读取 `StepTrace` 或核心函数，提供**有界偏置 / 控制系数**，不改写 `decay()`、`appraise()`、`gate_appraisal()` 等公式。
+- L1–L7（含 L3.5 元情绪）读取 `StepTrace` 或核心函数，提供**有界偏置 / 控制系数**，不改写 `decay()`、`appraise()`、`gate_appraisal()` 等公式。
 - 任何会改变曲线的新参数，都必须有单独开关和前后对比测试；默认走向必须写进文档，不能静默改变。
 - 行为修复保留 legacy 开关与旧 golden，确保修复前后可逐位对照。
 
@@ -124,11 +125,17 @@ trace = result["trace"]
 | `meta_appraisal` | 对 primary emotion 的四维元评估（仅开启时出现） |
 | `meta_emotions` | 本 tick 激活的元情绪列表（仅开启时出现） |
 | `regulation_bias` | 表达 / 调节 / 耐受的有界偏置（仅开启时出现） |
+| `contagion_enabled` | 本 tick 是否实际应用了 L7 感染（仅感染生效时出现） |
+| `contagion_applied` | 四维感染实际 delta（仅感染生效时出现） |
+| `appraisal_before_contagion` | 记忆先验之后、感染之前的六维 appraisal（仅感染生效时出现） |
 
 L3 字段只观察，不参与计算。L3.5 的四个 meta 字段同样只观察：
 `meta_emotion_enabled=False` 时 trace 仍只有原来的 27 个键；
 `meta_emotion_enabled=True` 且 `trace=True` 时才追加四个键。
 `trace=False` 时不计算元情绪，结果与关闭时逐值相同。
+L4 记忆先验生效时追加 `memory_bias_enabled / memory_bias_applied /
+appraisal_before_memory`；L7 感染生效时再追加三个 `contagion_*` 字段。
+两者默认关闭，默认 trace 仍是 27 键。
 
 L3 相位顺序：
 
@@ -147,11 +154,14 @@ python -m unittest test_core_line.py test_tolerance.py \
   test_engine_tolerance.py test_memory_system.py \
   test_l1_fast_channels.py test_interaction_activation.py \
   test_l2_slow_channels.py test_l3_atmosphere_scars.py \
-  test_l3_5_meta_emotion.py test_l5_tolerance.py -v
-# 上述回归 285 tests, OK；全量 338 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6 测试）
+  test_l3_5_meta_emotion.py test_l5_tolerance.py \
+  test_l7_contagion.py test_l7_integration.py -v
+# 上述回归 312 tests, OK；全量 365 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6、27 个 L7 测试）
 ```
 
-L6 的 `jev.py` / `noul.py` 只在显式开启时生成输入；默认路径不改变本文件任何公式或 golden。
+L6 的 `jev.py` / `noul.py` 只在显式开启时生成输入；L7 的 `contagion.py`
+只在传入 `contagion_bias` / 使用 `ContagionPair` 时生效。默认路径不改变本文件
+任何公式或 golden。
 
 另外验证了：
 

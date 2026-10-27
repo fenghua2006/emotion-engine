@@ -66,7 +66,7 @@
 - `tick(trace=True)` 返回 `StepTrace` 分阶段快照，不改变计算
 - 28 个 core 测试；旧 41 个测试全部通过（合计 69）
 - 记录两个顺序问题：氛围门控写入过晚、shock 密度采样过早（L3 已修，legacy 保留）
-- 详细契约见 `docs/CORE.md`；完整 L0–L6 安排见 `docs/INCREMENTAL_PLAN.md`
+- 详细契约见 `docs/CORE.md`；完整 L0–L7 安排见 `docs/INCREMENTAL_PLAN.md`
 
 ## 增量开发 L1 ✅ — 六条快通道
 - `fastline.py`：固定人格 / 固定 trust-love / 固定时钟的六通道参考线
@@ -164,9 +164,21 @@
 - 53 个 L6 测试；全量 338 tests OK；ruff clean；六套 golden 无 diff
 - 详细契约见 `docs/JEV.md` / `docs/MCP.md`
 
-## v0.8 — 多角色交互
-- 两个 EmotionEngine 实例间的情绪感染
-- A 的 appraisal → B 的情绪输入
+## v0.8 ✅ — 多角色交互（L7 v0）
+- `contagion.py`：单向情绪感染，A 的 `Appraisal` → B 的有界 appraisal 先验
+- 只传四维：`goal_conduciveness` / `expectedness` / `coping_potential` /
+  `social_evaluation`；不传 `goal_relevance` / `other_agency`
+- `gain` 默认 0.2，单维 `cap` 默认 0.08、绝对上限 0.2；中性源不触发
+- `engine.tick(contagion_bias=...)` 插在 L4 记忆先验之后、`appraise()` 之前；
+  默认路径的 result / trace 键集合不变
+- `ContagionPair`：先 tick A 再 tick B；拒绝同一引擎或共享
+  `state` / `memory` / `scars` / `tolerance`
+- 感染不写状态、记忆、`Personality`、快照或 MCP；schema 版本不变
+- 27 个 L7 测试（14 纯函数 + 13 集成）；全量 365 tests OK；ruff clean；
+  六套 golden 无 diff
+- 演示：`python scripts/multi_character_demo.py`
+- 详细设计见 `docs/L7_MULTI_CHARACTER.md`
+- 仍未做：双向反馈回路、角色关系强度、群体传播 / 衰减网络（L7.1+）
 
 ## v0.9 — 角色市场
 - 社区贡献蒸馏配方

@@ -698,6 +698,11 @@ class StepTrace:
     memory_bias_enabled: bool = False
     memory_bias_applied: Dict[str, float] = field(default_factory=dict)
     appraisal_before_memory: Dict[str, float] = field(default_factory=dict)
+    # L7 多角色情绪感染可观测性。只在显式传入 contagion_bias 且存在
+    # Appraisal 时序列化；默认 trace 键集合保持不变。
+    contagion_enabled: bool = False
+    contagion_applied: Dict[str, float] = field(default_factory=dict)
+    appraisal_before_contagion: Dict[str, float] = field(default_factory=dict)
     # L3.5 元情绪可观测性。只在 meta 开启且 trace=True 时序列化；
     # 这些字段只读，不参与核心计算。
     meta_enabled: bool = False
@@ -770,6 +775,17 @@ class StepTrace:
                 },
                 "appraisal_before_memory": dict(
                     self.appraisal_before_memory
+                ),
+            })
+        if self.contagion_enabled:
+            data.update({
+                "contagion_enabled": True,
+                "contagion_applied": {
+                    key: round(value, 4)
+                    for key, value in self.contagion_applied.items()
+                },
+                "appraisal_before_contagion": dict(
+                    self.appraisal_before_contagion
                 ),
             })
         if self.meta_enabled:

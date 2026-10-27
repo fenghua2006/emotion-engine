@@ -1,5 +1,5 @@
 """
-Emotion Engine v0.7-dev — 多通道情绪交互引擎（L0 核心·L2 慢通道·记忆·耐受窗·JEV/MCP）
+Emotion Engine v0.8-dev — 多通道情绪交互引擎（L0 核心·L2 慢通道·记忆·耐受窗·JEV/MCP·L7 感染）
 ==================================================================
 论文验证的设计决策:
   - Jennings (2025): 情绪 = 多个并行匹配流同时激活
@@ -63,6 +63,12 @@ L6 表达 / JEV / Noul / MCP（2026/10/27）:
   - 新参数全部默认关闭；失败写 _jev_error / _boundary_error，主链路继续
   - MCP 外壳与 trace 回放在 mcp_server.py / scripts/replay_trace.py，不改动力学
   - 详细记录见 docs/JEV.md、docs/MCP.md
+
+L7 多角色情绪感染 v0（2026/10/27）:
+  - contagion.py：A 的四维 Appraisal → B 的有界 appraisal 先验
+  - tick(contagion_bias=...) 在记忆先验之后、appraise 之前叠加
+  - ContagionPair 先 tick A 再 tick B；默认关闭，旧路径逐位不变
+  - 详细记录见 docs/L7_MULTI_CHARACTER.md
 
 v0.3 核心变更:
   - 记忆-情绪耦合: Arousal 驱动存储 + 30min 固化窗口 + 三级记忆
@@ -137,6 +143,12 @@ from core import (
     trust_target,
 )
 
+from contagion import (
+    CONTAGION_DIMENSIONS,
+    MAX_CONTAGION_CAP,
+    sanitize_contagion_bias,
+)
+
 from meta_emotion import (
     MetaEmotionProfile,
     evaluate_meta_emotion,
@@ -167,6 +179,7 @@ class _TickContext:
     appraisal: Optional[Appraisal]
     boundary_violation: bool
     appraisal_bias: Optional[Dict[str, float]]
+    contagion_bias: Optional[Dict[str, float]]
     trace_data: Optional[StepTrace]
     baseline: Dict[Channel, float]
     atmosphere_before: float
@@ -183,6 +196,9 @@ class _TickContext:
     atmosphere_arousal: float = 0.0
     appraisal_before_memory: Dict[str, float] = field(default_factory=dict)
     memory_bias_applied: Dict[str, float] = field(default_factory=dict)
+    contagion_enabled: bool = False
+    contagion_applied: Dict[str, float] = field(default_factory=dict)
+    appraisal_before_contagion: Dict[str, float] = field(default_factory=dict)
     blends: List[str] = field(default_factory=list)
     meta_state: Optional[Any] = None
     meta_load_bias: float = 0.0
@@ -342,7 +358,8 @@ class EmotionEngine:
              boundary_violation: bool = False,
              now: Optional[float] = None,
              trace: bool = False,
-             appraisal_bias: Optional[Dict[str, float]] = None) -> Dict:
+             appraisal_bias: Optional[Dict[str, float]] = None,
+             contagion_bias: Optional[Dict[str, float]] = None) -> Dict:
         """
         每次对话轮次/事件 的完整情绪更新。
         boundary_violation: 低信任时的越界称呼（亲密词等）
@@ -350,6 +367,8 @@ class EmotionEngine:
         trace: 为 True 时额外返回 StepTrace（分阶段快照，不改变计算）。
         appraisal_bias: L4 记忆先验；只叠加到六维 Appraisal，默认 None
             时计算路径与键集合完全不变。
+        contagion_bias: L7 多角色感染先验；在记忆先验之后、appraise() 之前
+            叠加，默认 None 时计算路径与键集合完全不变。
 
         实现被拆成带顺序的 _step_*；顺序即契约，改变顺序必须重跑
         L1/L2/L5 六套 golden 与 L3 A/B 测试。
@@ -360,6 +379,7 @@ class EmotionEngine:
             now=now,
             trace=trace,
             appraisal_bias=appraisal_bias,
+            contagion_bias=contagion_bias,
         )
         self._step_decay(ctx)
         self._step_slow_channels(ctx)
@@ -378,7 +398,9 @@ class EmotionEngine:
                     boundary_violation: bool,
                     now: Optional[float],
                     trace: bool,
-                    appraisal_bias: Optional[Dict[str, float]]) -> _TickContext:
+                    appraisal_bias: Optional[Dict[str, float]],
+                    contagion_bias: Optional[Dict[str, float]]
+                    ) -> _TickContext:
         now = time.time() if now is None else now
         raw_elapsed_minutes = (now - self.state._last_update) / 60.0
         elapsed_minutes = max(0.0, raw_elapsed_minutes)
@@ -420,6 +442,7 @@ class EmotionEngine:
             appraisal=appraisal,
             boundary_violation=boundary_violation,
             appraisal_bias=appraisal_bias,
+            contagion_bias=sanitize_contagion_bias(contagion_bias),
             trace_data=trace_data,
             baseline=self.personality.baseline(),
             atmosphere_before=atmosphere_before,
@@ -474,7 +497,7 @@ class EmotionEngine:
             ctx.trace_data.slow_positive_input = positive_input
 
     def _step_appraisal(self, ctx: _TickContext) -> None:
-        """Step 3: 记忆先验 → 认知评估 → 门控 → 伤疤 → 氛围 → 写入 state。"""
+        """Step 3: 记忆 / 感染先验 → 认知评估 → 门控 → 伤疤 → 氛围 → 写入。"""
         appraisal = ctx.appraisal
         raw: Dict[Channel, float] = {}
         gated: Dict[Channel, float] = {}
@@ -505,6 +528,36 @@ class EmotionEngine:
                 )
                 ctx.trace_data.appraisal_before_memory = dict(
                     ctx.appraisal_before_memory
+                )
+
+        # L7: 多角色感染先验。排在记忆先验之后、appraise() 之前；
+        # 只改四维 Appraisal，不直接改 state / personality。无先验或
+        # 无 Appraisal 时不创建新对象、不写 trace 字段。
+        if appraisal is not None and ctx.contagion_bias:
+            ctx.appraisal_before_contagion = {
+                name: float(getattr(appraisal, name))
+                for name in APPRAISAL_LIMITS
+            }
+            biased = apply_appraisal_bias(
+                appraisal, ctx.contagion_bias, cap=MAX_CONTAGION_CAP,
+            )
+            for name in CONTAGION_DIMENSIONS:
+                delta = (
+                    getattr(biased, name)
+                    - ctx.appraisal_before_contagion[name]
+                )
+                if abs(delta) > 1e-12:
+                    ctx.contagion_applied[name] = delta
+            appraisal = biased
+            ctx.appraisal = appraisal
+            ctx.contagion_enabled = True
+            if ctx.trace_data:
+                ctx.trace_data.contagion_enabled = True
+                ctx.trace_data.contagion_applied = dict(
+                    ctx.contagion_applied
+                )
+                ctx.trace_data.appraisal_before_contagion = dict(
+                    ctx.appraisal_before_contagion
                 )
 
         if appraisal is not None:
@@ -882,6 +935,11 @@ class EmotionEngine:
             result["memory_bias"] = {
                 key: round(value, 4)
                 for key, value in ctx.memory_bias_applied.items()
+            }
+        if ctx.contagion_enabled:
+            result["contagion_bias"] = {
+                key: round(value, 4)
+                for key, value in ctx.contagion_applied.items()
             }
         if ctx.trace_data is not None:
             result["trace"] = ctx.trace_data.to_dict()
@@ -1501,6 +1559,7 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
                 auto_boundary: bool = False,
                 boundary_violation: Optional[bool] = None,
                 trace: bool = False,
+                contagion_bias: Optional[Dict[str, float]] = None,
                 ) -> Dict:
     """
     LLM 增强回应——引擎算情绪，LLM 写表达。
@@ -1517,6 +1576,7 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
     auto_boundary: 用 Noul 检测文本边界侵犯；显式 boundary_violation 优先。
     boundary_violation: 调用方已经判定好的边界侵犯；None 表示未判定。
     trace: 是否在返回值里附带 StepTrace（用于回放/仪表盘）。
+    contagion_bias: L7 多角色感染先验；原样传给 respond()，默认关闭。
     """
     jev_result = None
     jev_error = None
@@ -1563,6 +1623,7 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
         memory_appraisal_bias=memory_appraisal_bias,
         boundary_violation=boundary_violation,
         trace=trace,
+        contagion_bias=contagion_bias,
     )
     if prior_error:
         local["_memory_prior_error"] = prior_error
@@ -1640,18 +1701,22 @@ def respond(engine: "EmotionEngine", event_type: str,
             character_id: str = "default",
             memory_appraisal_bias: Optional[Dict[str, float]] = None,
             boundary_violation: bool = False,
-            trace: bool = False) -> Dict:
+            trace: bool = False,
+            contagion_bias: Optional[Dict[str, float]] = None) -> Dict:
     """
     纯本地计算。零 API 调用。
     character_id: 选角色专属模板；hyper/hypo 时 zone 优先于主导情绪。
     memory_appraisal_bias: L4 记忆先验；无 appraisal 时不会拉状态。
     boundary_violation: 文本/上游已判定的边界侵犯。
     trace: 是否在返回值里附带 StepTrace。
+    contagion_bias: L7 多角色感染先验；无 appraisal 时不会拉状态。
     返回: 表情参数 + 行为倾向 + 简短回应 + 是否需要 LLM。
     """
     tick_kwargs: Dict[str, Any] = {}
     if memory_appraisal_bias:
         tick_kwargs["appraisal_bias"] = memory_appraisal_bias
+    if contagion_bias:
+        tick_kwargs["contagion_bias"] = contagion_bias
     result = engine.tick(
         appraisal,
         boundary_violation=boundary_violation,
@@ -1695,6 +1760,8 @@ def respond(engine: "EmotionEngine", event_type: str,
     }
     if "memory_bias" in result:
         response["memory_bias"] = result["memory_bias"]
+    if "contagion_bias" in result:
+        response["contagion_bias"] = result["contagion_bias"]
     if trace and "trace" in result:
         response["trace"] = result["trace"]
     return response

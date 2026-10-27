@@ -1,4 +1,4 @@
-# 增量开发计划（L0–L6 + L3.5）
+# 增量开发计划（L0–L7 + L3.5）
 
 > 主开发目录：`C:\Users\Administrator\Desktop\emotion-engine`。后续所有修改、测试、提交都在这里。
 > D 盘 `D:\Users\Administrator\Desktop\emotion-engine` 是 2026-10-25 快照，停止更新。
@@ -19,6 +19,7 @@
 | **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0 + L5.1） | 双 golden；四域容量；L4 后 285 tests |
 | **P0** | 可维护性护栏 | ✅ 2026-10-27 | tick 拆分 / 表达&LLM 分层 / ruff+coverage+CI / schema 版本；285 tests |
 | **L6** | 表达 / LLM / JEV / MCP | ✅ 2026-10-27（v0） | 规则优先 + LLM 可选回退；Noul 边界信号；MCP stdio；338 tests |
+| **L7** | 多角色情绪感染 | ✅ 2026-10-27（v0） | 单向 A→B；四维有界先验；默认路径零变化；365 tests |
 
 ## L0：核心情绪线 ✅
 
@@ -453,17 +454,75 @@ L1/L2/L5 六套 golden 无 diff
 - 反讽、长距离指代与复杂否定的语义评估；
 - JEV 规则词典的系统化扩充与标注集评估；
 - 表达侧消费 L3.5 的 `expression_gain` / `display_rule`；
-- 多角色情绪感染（L7+）。
+- 双向 / 群体情绪感染（L7.1+）。
+
+## L7：多角色情绪感染 ✅ v0
+
+目标：让 A 的 `Appraisal` 成为 B 的有界输入，同时保持两个角色的状态、记忆、
+人格与耐受完全隔离。v0 只做单向 A → B。
+
+交付：
+
+- `contagion.py`：
+  - `CONTAGION_DIMENSIONS` 固定四维：`goal_conduciveness` /
+    `expectedness` / `coping_potential` / `social_evaluation`；
+  - `derive_contagion_bias()`：按中性值归一化，乘 `gain`（默认 0.2），
+    单维截断到 `±cap`（默认 0.08，绝对上限 0.2）；
+  - `sanitize_contagion_bias()`：只接受 Mapping，过滤 bool / 非数值 /
+    NaN / Inf / 未知 key，逐维 clamp，空结果返回 `None`；
+  - `ContagionPair`：`tick_pair()` 先 A 后 B，`tick_target()` 只 tick B；
+    拒绝同一引擎或共享 `state` / `memory` / `scars` / `tolerance`，
+    共享只读 `Personality` 允许；
+  - 不导入 `engine.py`，通过 duck typing 调用 `.tick()`。
+- `core.py`：`StepTrace` 增加 `contagion_enabled` / `contagion_applied` /
+  `appraisal_before_contagion`，仅感染实际生效且 `trace=True` 时序列化。
+- `engine.py`：
+  - `tick(..., contagion_bias=None)` 在 L4 记忆先验之后、`appraise()` 之前
+    叠加；
+  - 无 `Appraisal` 时完全 no-op；
+  - 默认路径 result / trace 键集合不变；感染生效时 result 只多
+    `contagion_bias`，trace 只多三个键；
+  - `respond()` / `respond_llm()` 透传可选 `contagion_bias`。
+- `scripts/multi_character_demo.py`：A 经历负面事件，B 在有无感染下对比。
+- `test_l7_contagion.py`（14）+ `test_l7_integration.py`（13）。
+- `docs/L7_MULTI_CHARACTER.md`：数据流、公式、API、隔离、限制。
+
+关键口径：
+
+- 只传四维；`goal_relevance` / `other_agency` 不跨角色传输。
+- 同一 tick 的慢通道在 appraisal 之前运行，因此 love / trust 生长仍看原始
+  appraisal；感染只影响本 tick 评估与后续状态。
+- 感染不写状态、记忆、`Personality`、快照、MCP；schema 版本不变。
+- 默认路径与六套 golden 逐位不变。
+
+验收结果：
+
+```text
+27 L7 tests, OK
+365 tests total, OK
+ruff check . -> All checks passed
+coverage report -> 87% total（branch，gate 80）
+L1/L2/L5 六套 golden 无 diff
+demo：B 四维 bias -0.08；B joy 下降 / sadness 上升；A 不受 B 影响
+```
+
+仍未做：
+
+- 双向反馈回路；
+- 按角色关系强度 / 信任逐对设置 gain；
+- 群体传播网络、传播链与距离衰减；
+- 用 A 的最终表达状态而不仅是输入 appraisal 作为感染源。
 
 ## 顺序
 
 ```text
-L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L4 ✅ → P0 ✅ → L6 ✅
+L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L4 ✅ → P0 ✅ → L6 ✅ → L7 ✅
 ```
 
 L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L5 校准核心与
-L5.1 表达/仪表盘已完成；L4 v0.2、P0 可维护性护栏与 L6（JEV / Noul / LLM /
-MCP）已完成。下一层可按需进入多角色交互或表达侧元情绪接入。
+L5.1 表达/仪表盘已完成；L4 v0.2、P0 可维护性护栏、L6（JEV / Noul / LLM /
+MCP）与 L7 v0（单向情绪感染）已完成。下一层可按需进入 L7.1 双向 / 群体传播，
+或表达侧元情绪接入。
 
 ## 每层 Definition of Done
 

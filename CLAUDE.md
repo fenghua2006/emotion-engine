@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-多通道情绪交互引擎 — a 10-channel emotion engine for AI companions. Replaces the 1974 PAD (Pleasure-Arousal-Dominance) model with independent emotion channels that modulate each other without canceling. MIT license. Pure dynamics live in `core.py`; `engine.py` is the composition root (~1,725 lines) plus `atmosphere.py`, `meta_emotion.py`, `tolerance.py`, `memory.py`, `expression.py`, `llm_client.py`, `jev.py`, and `noul.py` modules.
+多通道情绪交互引擎 — a 10-channel emotion engine for AI companions. Replaces the 1974 PAD (Pleasure-Arousal-Dominance) model with independent emotion channels that modulate each other without canceling. MIT license. Pure dynamics live in `core.py`; `engine.py` is the composition root (~1,725 lines) plus `atmosphere.py`, `meta_emotion.py`, `tolerance.py`, `memory.py`, `expression.py`, `llm_client.py`, `jev.py`, `noul.py`, and `contagion.py` modules.
 
 Owner: 枫骅 (fenghua2006). GitHub: `github.com/fenghua2006/emotion-engine`.
 
@@ -43,13 +43,18 @@ python -m unittest test_l3_5_meta_emotion.py -v
 python -m unittest test_l5_tolerance.py test_l5_1_expression_dashboard.py -v
 python -m unittest test_p0_maintainability.py -v
 python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v
+python -m unittest test_l7_contagion.py test_l7_integration.py -v
 
-# Full suite (338 tests)
+# Full suite (365 tests)
 python -m unittest discover
 
 # L6 JEV / MCP
 uv run python mcp_server.py --db memory.db
 uv run python scripts/replay_trace.py --text "没想到你居然离开了" --character furina
+
+# L7 multi-character contagion demo
+uv run python scripts/multi_character_demo.py
+uv run python scripts/multi_character_demo.py --gain 0.3 --cap 0.1
 
 # L1 golden generation / verification
 python scripts/generate_l1_golden.py                    # current behavior
@@ -86,7 +91,7 @@ uv run python C:\Users\Administrator\Desktop\furina_fresh.py    # Baseline + sce
 
 ## Architecture
 
-Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,725 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Presentation: `expression.py` + `llm_client.py`. Text entry: `jev.py` + `noul.py`. MCP wrapper: `mcp_server.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
+Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,725 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Presentation: `expression.py` + `llm_client.py`. Text entry: `jev.py` + `noul.py`. Multi-character contagion: `contagion.py`. MCP wrapper: `mcp_server.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
 
 ### L0 boundary
 
@@ -136,7 +141,7 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
 - Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, and the full suite is 338. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 27, and the full suite is 365. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
 
 ### Relationship memory (L4 v0.2)
 
@@ -182,10 +187,27 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `mcp_server.py` is a zero-dependency MCP stdio server exposing `tick`, `recall`, `state`; memory is lazy and isolated by `(character_id, user_id)`. `scripts/replay_trace.py` and dashboard `POST /api/replay` provide read-only trace replay.
 - 53 tests across `test_l6_jev.py` (22), `test_l6_integration.py` (15), `test_l6_mcp.py` (16). Details: `docs/JEV.md`, `docs/MCP.md`.
 
+### L7 multi-character contagion (v0)
+
+`contagion.py` is a pure layer importing only `core.APPRAISAL_LIMITS` + stdlib. One-way A → B: A's input `Appraisal` becomes a bounded prior on B's `Appraisal`; B still uses its own personality, trust/love, tolerance, scars, and atmosphere.
+
+- Transmitted dimensions are exactly `goal_conduciveness`, `expectedness`, `coping_potential`, `social_evaluation`. `goal_relevance` / `other_agency` are deliberately excluded.
+- `derive_contagion_bias()` normalizes `expectedness` / `coping_potential` by `(v - 0.5) * 2`, scales by `gain` (default `0.2`, clamped to `[0, 1]`), and clamps each dimension to `±cap` (default `0.08`). Absolute cap is `0.2`; neutral source returns `{}`.
+- `sanitize_contagion_bias()` is the engine boundary: Mapping only, four known keys, rejects bool / non-numeric / NaN / Inf, clamps, drops zeros, returns `None` when empty.
+- `EmotionEngine.tick(..., contagion_bias=None)` applies it after the L4 memory prior and before `appraise()`. Slow channels still run before appraisal, so same-tick love/trust growth sees the original appraisal.
+- `result["contagion_bias"]` and three trace keys (`contagion_enabled`, `contagion_applied`, `appraisal_before_contagion`) appear only when contagion actually ran with an appraisal. Default trace remains 27 keys; default result keys are unchanged.
+- `ContagionPair(source, target, gain=..., cap=...)`: `tick_pair()` ticks source then target; `tick_target()` ticks only B. Constructor rejects the same engine and shared `state` / `memory` / `scars` / `tolerance`; shared `Personality` is allowed because it is read-only.
+- `respond()` / `respond_llm()` forward an optional `contagion_bias`; LLM output still only affects `utterance`.
+- No snapshot / memory schema change (`SNAPSHOT_VERSION == 2`, `MEMORY_SCHEMA_VERSION == 1`); contagion is per-tick input, never persisted or stored as memory.
+- 27 tests: `test_l7_contagion.py` (14) + `test_l7_integration.py` (13). Demo: `scripts/multi_character_demo.py`. Details: `docs/L7_MULTI_CHARACTER.md`.
+- Deferred to L7.1+: two-way feedback loops, pairwise relationship-strength gain, population propagation / decay.
+
 ### Core data flow
 
 ```
 Appraisal (6-dim cognitive evaluation)
+  → optional L4 memory prior (bounded, ±0.2)
+  → optional L7 contagion prior (four dims, ±0.08 default, ±0.2 max)
   → raw activation (per-channel)
   → gate_appraisal (trust/love gates modulate input)
   → tolerance negative_gain
@@ -212,13 +234,14 @@ applies boundary/interactions, and detects shock — pre-L3 behavior for exact A
 | `EmotionalState` | 10-channel float state. `felt(ch)` returns log₁₀ perception. `delta(ch)` compares against `_previous` snapshot. |
 | `Personality` | OCEAN → `baseline()` maps Big Five to per-channel baselines. Locked — personality doesn't change. |
 | `Appraisal` | 6-dim cognitive evaluation: `goal_relevance`, `goal_conduciveness`, `expectedness`, `other_agency`, `coping_potential`, `social_evaluation`. All 0–1. |
-| `StepTrace` (`core.py`) | Phase snapshots + L3 atmosphere/scar + L3.5 meta observations from `tick(trace=True)`; observation only. |
+| `StepTrace` (`core.py`) | Phase snapshots + L3 atmosphere/scar + L3.5 meta + conditional L4 / L7 bias observations from `tick(trace=True)`; observation only. |
 | `EmotionEngine` | Composition root. `tick(appraisal)` runs full update cycle. `wake()` handles offline time. Per-agent instance (one engine = one character). |
 | `MetaEmotionProfile` / `MetaEmotionState` (`meta_emotion.py`) | Stable character preferences vs per-tick second-order appraisal. v0 trace-only; not persisted. |
 | `MemoryItem` / `MemoryStoreDB` | Legacy SQLite-backed memory. Arousal-driven storage (not valence). 30-min consolidation window (Nielson 2007). |
 | `ToleranceState` (`tolerance.py`) | Window of tolerance. Negative-only load, four-domain capacity weighted into `capacity`, typed scar compression, two-tick hysteresis, hyper/hypo control multipliers. `capacity_model="scalar"` reproduces pre-L5. |
 | `RelationshipMemoryStore` / `MemoryService` (`memory.py`) | Relationship-scoped long-term memory: cards, facts, relationship summary, open loops. SQLite FTS5 + CJK bigrams. |
 | `SensitizationStore` | Kindling (Post 1992) + Bayesian threat (MindLAB 2024). Pattern matching on Appraisal. |
+| `ContagionPair` (`contagion.py`) | One-way L7 orchestrator between two isolated engines. Derives a four-dim bounded bias from A's appraisal and feeds it to B. Never mutates either engine's personality. |
 
 ### Channel taxonomy
 
@@ -282,7 +305,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 27 dedicated tests, and all six existing goldens remaining unchanged when contagion is off.
 
 ## Related files (Desktop, not in repo)
 

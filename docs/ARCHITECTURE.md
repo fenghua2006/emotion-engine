@@ -1,7 +1,7 @@
 # 架构与维护边界
 
 > 目标：让每个 L 阶段都能独立修改、独立测试，不靠“读完整条 tick”才能判断影响。
-> 适用版本：v0.7-dev + P0 可维护性重构 + L6（JEV / Noul / MCP）。
+> 适用版本：v0.8-dev + P0 可维护性重构 + L6（JEV / Noul / MCP）+ L7（多角色情绪感染）。
 > 相关：`docs/CORE.md`（L0）、`docs/INCREMENTAL_PLAN.md`（阶段计划）。
 
 ## 1. 依赖方向
@@ -16,6 +16,7 @@ core.py              纯动力学；只依赖标准库
   ├── llm_client.py  网络薄客户端；不知道情绪状态
   ├── jev.py         L6 文本 → Appraisal；只依赖 core + llm_client
   ├── noul.py        L6 文本边界信号；只依赖标准库
+  ├── contagion.py   L7 多角色感染；只依赖 core.APPRAISAL_LIMITS + 标准库
   └── engine.py      组合根：按顺序调用以上模块
         ├── mcp_server.py  零依赖 stdio 外壳；只调用 engine / memory / jev / noul
         ├── dashboard/     只读 engine 输出，不反向写动力学
@@ -29,6 +30,7 @@ core.py              纯动力学；只依赖标准库
 - LLM 客户端不读 `EmotionEngine`；只接收 prompt，失败返回 `(None, None)`。
 - 记忆可以影响 appraisal / relationship / prompt，但**永不写** `Personality` / `CharacterCore`。
 - JEV 只返回 `Appraisal` / confidence / evidence，不写 state、人格或记忆；Noul 只返回文本信号。
+- L7 感染只返回四维有界 `Appraisal` 偏置；不直接写 `EmotionalState`，不写记忆 / 人格 / 快照。
 - `mcp_server.py` 不导入 dashboard，也不修改 engine 的内部状态结构；工具失败以 `isError` 返回。
 
 ## 2. tick 管线
@@ -40,7 +42,7 @@ core.py              纯动力学；只依赖标准库
 | 0 | `_begin_tick()` | 时钟、NaN/Inf 防护、氛围入口 clamp、trace before、保存上一帧 |
 | 1 | `_step_decay()` | 思念消退、快通道弹性衰减、基线回弹 |
 | 2 | `_step_slow_channels()` | love / trust 生长；正面事件按本 tick 增量输入 |
-| 3 | `_step_appraisal()` | L4 记忆先验 → appraise → gate → 耐受增益 → 伤疤 → 氛围 → 写入 state |
+| 3 | `_step_appraisal()` | L4 记忆先验 → L7 感染先验 → appraise → gate → 耐受增益 → 伤疤 → 氛围 → 写入 state |
 | 4 | `_step_after_appraisal()` | 唤醒度采样、legacy 晚调制、越界惩罚、trace appraisal 字段 |
 | 5 | `_step_interactions()` | 交互矩阵；负性强度受耐受窗调制 |
 | 6 | `_step_shock()` | 对比度冲击检测；corrected 模式更新氛围 |
@@ -99,6 +101,26 @@ python scripts/generate_l5_tolerance_golden.py --legacy --check
 - `scripts/replay_trace.py` 与 dashboard `POST /api/replay` 用副本回放，
   不写快照 / 记忆。
 
+### L7 多角色感染
+
+`contagion.py` 是纯组合层，不导入 `engine.py`，通过 duck typing 调用 `.tick()`：
+
+- `derive_contagion_bias(source_appraisal)` 只取四维
+  （`goal_conduciveness` / `expectedness` / `coping_potential` /
+  `social_evaluation`），按中性值归一化后乘 `gain`，单维截断到 `±cap`。
+- `sanitize_contagion_bias()` 是引擎边界：只接受 Mapping，拒绝 bool /
+  非数值 / NaN / Inf，逐维 clamp，空结果返回 `None`。
+- `engine.tick(contagion_bias=...)` 在 L4 记忆先验之后、`appraise()` 之前
+  叠加；没有 `Appraisal` 时完全 no-op。
+- `ContagionPair` 负责隔离：拒绝同一引擎或共享 `state` / `memory` /
+  `scars` / `tolerance`；共享只读 `Personality` 允许。
+- 默认路径不新增 result / trace 键；只有感染实际运行时才追加
+  `result["contagion_bias"]` 与三个 trace 字段。
+- 感染是每 tick 输入，不写入快照或记忆；`SNAPSHOT_VERSION` /
+  `MEMORY_SCHEMA_VERSION` 不变。慢通道在 appraisal 前运行，因此同一 tick
+  的 love / trust 生长仍看原始 appraisal。
+- 详细契约与演示：[`L7_MULTI_CHARACTER.md`](L7_MULTI_CHARACTER.md)。
+
 ## 4. 版本与迁移
 
 ### 快照 payload
@@ -146,7 +168,7 @@ coverage report
 
 ## 6. 修改某个 L 阶段时
 
-1. 先确认改动属于哪一层：纯公式（`core.py`）、控制层（`tolerance.py`）、观测层（`meta_emotion.py`）、记忆（`memory.py`）、表达（`expression.py`）、文本入口（`jev.py` / `noul.py`）、协议外壳（`mcp_server.py`）、编排（`engine.py`）。
+1. 先确认改动属于哪一层：纯公式（`core.py`）、控制层（`tolerance.py`）、观测层（`meta_emotion.py`）、记忆（`memory.py`）、表达（`expression.py`）、文本入口（`jev.py` / `noul.py`）、多角色感染（`contagion.py`）、协议外壳（`mcp_server.py`）、编排（`engine.py`）。
 2. 如果改变默认曲线，增加 legacy 开关和前后对照测试；保留旧 golden。
 3. 如果新增返回字段，默认路径的键集合保持不变；需要时用独立开关控制。
 4. 如果新增持久化字段，同时更新快照 / 记忆 schema 版本与迁移测试。
@@ -158,5 +180,5 @@ coverage report
 - `engine.py` 仍是组合根，包含旧版内存 `MemoryStoreDB`、快照 SQLite 与 demo；后续可以继续拆，但不要为了“行数少”改变行为。
 - `dashboard/server.py` 仍读取 engine 的私有 `_dominant_channel`；它通过 re-export 工作，后续可改为公开接口。
 - 测试中仍有直接访问私有成员的断言；这是为了锁定分阶段行为，不是对外 API 承诺。
-- 覆盖率 gate 只覆盖核心模块与 L6 的 `jev` / `noul` / `mcp_server`；`dashboard` / `scripts` / `characters` 不做覆盖率门禁。
+- 覆盖率 gate 只覆盖核心模块与 L6 的 `jev` / `noul` / `mcp_server`、L7 的 `contagion`；`dashboard` / `scripts` / `characters` 不做覆盖率门禁。
 - JEV v0 是子串 / 词边界规则，不处理反讽、长距离指代与复杂否定；LLM 补充只做 JSON 夹取，不做多轮自我校验。

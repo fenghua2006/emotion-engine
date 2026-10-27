@@ -10,7 +10,7 @@ PAD（Pleasure-Arousal-Dominance, 1974）把情绪压缩成三维坐标中的单
 
 Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时存在，这是"苦涩的微笑"，不是一个坐标点。50 年后，该有人替代它了。
 
-## v0.7 架构
+## v0.8 架构
 
 ```
                     ┌──────────────┐
@@ -42,7 +42,7 @@ Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时�
 
 `tolerance.py` 不新增情绪通道，而是在每次 tick 后读取状态，决定下一 tick 是调节态、过度唤醒还是低唤醒。L5 默认把容量拆成愤怒 / 恐惧 / 亲密 / 批评四域，再取加权有效容量。
 
-底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；两者默认关闭，不改变默认曲线。
+底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；L7 增加单向多角色情绪感染（`contagion.py`）。这些入口默认关闭，不改变默认曲线。
 
 ## 快速开始
 
@@ -117,10 +117,10 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L6 后全量 338 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L7 后全量 365 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - P0 可维护性：`tick()` 拆成有序 `_step_*`、表达层 / LLM 客户端分层、ruff + coverage + CI、快照 / 记忆 schema 版本与迁移点；见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
-- L0–L6 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
+- L0–L7 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
 
 ## L1 六条快通道（已完成）
@@ -131,7 +131,8 @@ trace = result["trace"]
 - 双 golden：`fixtures/l1_golden.json`（当前）+ `l1_golden_legacy.json`（v0.7 对照），误差 < `1e-9`。
 - 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 166 tests，
   L3.5 完成后 191 tests，L5 校准核心完成后 229 tests，L5.1 表达/仪表盘后 241 tests，
-  L4 记忆接入后 285 tests，L6 JEV / Noul / MCP 后 **338 tests, OK**。
+  L4 记忆接入后 285 tests，L6 JEV / Noul / MCP 后 338 tests，
+  L7 情绪感染后 **365 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -214,7 +215,7 @@ print(result["trace"]["meta_emotions"])
   `tolerance_load_bias` 作为有界附加负荷（≤0.2）进入 tolerance；默认关闭。
 - 同一 anger 的两种二阶态度：
   `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
-- 25 个 L3.5 测试；L6 后全量 **338 tests, OK**。
+- 25 个 L3.5 测试；L7 后全量 **365 tests, OK**。
 - 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
@@ -313,6 +314,36 @@ print(result["_boundary"]) # violated / confidence / categories
   不改真实引擎 / 快照 / 记忆。
 - 测试：`python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v`。
 - 详细契约：[`docs/JEV.md`](docs/JEV.md)、[`docs/MCP.md`](docs/MCP.md)。
+
+## L7 多角色情绪感染（v0）
+
+L7 让 A 的六维 `Appraisal` 成为 B 的**有界输入**，同时保持 B 自己的人格、
+信任、耐受窗、伤疤与氛围。v0 只做单向 A → B，不共享情绪状态。
+
+```python
+from contagion import ContagionPair
+
+pair = ContagionPair(engine_a, engine_b)          # 单向：A → B
+a_result, b_result = pair.tick_pair(
+    source_appraisal=a_appraisal,
+    target_appraisal=b_appraisal,
+    now=now,
+)
+print(b_result["contagion_bias"])
+# {'goal_conduciveness': -0.08, 'expectedness': -0.08, ...}
+```
+
+- 只传四维：`goal_conduciveness` / `expectedness` / `coping_potential` /
+  `social_evaluation`；不传 `goal_relevance` / `other_agency`。
+- 公式：按中性值归一化后乘 `gain`（默认 0.2），单维截断到 `±cap`
+  （默认 0.08，绝对上限 0.2）；中性源不触发感染。
+- `engine.tick(..., contagion_bias=...)` 在 L4 记忆先验之后、`appraise()` 之前
+  叠加；默认路径的 result / trace 键集合不变。
+- 感染只影响 appraisal，不写状态、记忆或 `Personality`；`ContagionPair` 拒绝
+  共享 `state` / `memory` / `scars` / `tolerance` 的两个引擎。
+- 测试：`python -m unittest test_l7_contagion.py test_l7_integration.py -v`；
+  演示：`python scripts/multi_character_demo.py`。
+- 详细设计、边界与后续计划：[`docs/L7_MULTI_CHARACTER.md`](docs/L7_MULTI_CHARACTER.md)。
 
 ## 10 通道
 
