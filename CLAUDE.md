@@ -44,9 +44,10 @@ python -m unittest test_l5_tolerance.py test_l5_1_expression_dashboard.py -v
 python -m unittest test_p0_maintainability.py -v
 python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v
 python -m unittest test_l7_contagion.py test_l7_integration.py -v
-python -m unittest test_l7_1_bidirectional.py -v
+python -m unittest test_l7_1_bidirectional.py test_l7_2_relationship_model.py -v
+python -m unittest test_l7_3_network.py test_l7_4_directional.py -v
 
-# Full suite (393 tests)
+# Full suite (436 tests)
 python -m unittest discover
 
 # L6 JEV / MCP
@@ -58,6 +59,7 @@ uv run python scripts/multi_character_demo.py
 uv run python scripts/multi_character_demo.py --gain 0.3 --cap 0.1
 uv run python scripts/multi_character_demo.py --bidirectional --strength 0.5
 uv run python scripts/multi_character_demo.py --auto-strength --bidirectional
+uv run python scripts/contagion_network_demo.py
 
 # L1 golden generation / verification
 python scripts/generate_l1_golden.py                    # current behavior
@@ -144,7 +146,7 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
 - Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 55, and the full suite is 393. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 98, and the full suite is 436. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
 
 ### Relationship memory (L4 v0.2)
 
@@ -190,23 +192,25 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `mcp_server.py` is a zero-dependency MCP stdio server exposing `tick`, `recall`, `state`; memory is lazy and isolated by `(character_id, user_id)`. `scripts/replay_trace.py` and dashboard `POST /api/replay` provide read-only trace replay.
 - 53 tests across `test_l6_jev.py` (22), `test_l6_integration.py` (15), `test_l6_mcp.py` (16). Details: `docs/JEV.md`, `docs/MCP.md`.
 
-### L7 multi-character contagion (v0 + v0.1 bidirectional + v0.2 auto relationship)
+### L7 multi-character contagion (v0 + v0.1 bidirectional + v0.2 auto relationship + v0.3 network + v0.4 directional)
 
-`contagion.py` is a pure layer importing only `core.APPRAISAL_LIMITS` + stdlib. v0 does one-way A → B; v0.1 adds bidirectional A ↔ B and a `strength` multiplier; v0.2 derives `strength` from trust / love. A's input `Appraisal` becomes a bounded prior on B's `Appraisal`; B still uses its own personality, trust/love, tolerance, scars, and atmosphere.
+`contagion.py` is a pure layer importing only `core.APPRAISAL_LIMITS` + stdlib. v0 does one-way A → B; v0.1 adds bidirectional A ↔ B and a `strength` multiplier; v0.2 derives `strength` from trust / love; v0.3 adds directed multi-hop networks; v0.4 makes A→B and B→A strengths independent. A's input `Appraisal` becomes a bounded prior on B's `Appraisal`; B still uses its own personality, trust/love, tolerance, scars, and atmosphere.
 
 - Transmitted dimensions are exactly `goal_conduciveness`, `expectedness`, `coping_potential`, `social_evaluation`. `goal_relevance` / `other_agency` are deliberately excluded.
 - `derive_contagion_bias()` normalizes `expectedness` / `coping_potential` by `(v - 0.5) * 2`, scales by `gain` (default `0.2`, clamped to `[0, 1]`), and clamps each dimension to `±cap` (default `0.08`). Absolute cap is `0.2`; neutral source returns `{}`.
 - `ContagionPair(..., strength=1.0)`: `effective_gain = gain * strength`; `strength` is clamped to `[0, 1]`, and `strength=0` disables contagion. It is an explicit per-pair multiplier when `auto_strength=False`.
 - `relationship_strength(trust, love)`: weighted `trust × 0.6 + (love / 2) × 0.4`, clamped to `[0, 1]`; invalid inputs count as 0, weights are normalized. `auto_strength=True` / `from_relationship()` averages both engines' strengths and refreshes before every `derive()`. Auto strength only scales `gain`; it never bypasses `cap`.
 - `tick_bidirectional()` derives both directions from the two input appraisals before ticking either engine, so results are order-independent and there is no same-tick feedback loop.
+- `ContagionNetwork(engines, edges, hop_decay=0.5, max_hops=3)`: directed edges carry `strength`; the first hop uses it directly, later hops multiply by `hop_decay`. The strongest path per `(origin, target)` wins; biases from multiple origins are summed then clamped per dimension to `±cap`. `max_hops` is capped at 8. All node biases are derived before any node ticks.
+- `DirectionalRelationship(trust, love, familiarity, boundaries)`: `directional_relationship_strength()` normalizes the three components (defaults 0.6 / 0.4 / 0.2) and applies `1 / (1 + boundary_penalty × count)`; `ContagionPair.from_directional_relationship()` computes independent A→B and B→A strengths and averages them for `pair.strength`. `directional=True` and `auto_strength=True` are mutually exclusive.
 - `sanitize_contagion_bias()` is the engine boundary: Mapping only, four known keys, rejects bool / non-numeric / NaN / Inf, clamps, drops zeros, returns `None` when empty.
 - `EmotionEngine.tick(..., contagion_bias=None)` applies it after the L4 memory prior and before `appraise()`. Slow channels still run before appraisal, so same-tick love/trust growth sees the original appraisal.
 - `result["contagion_bias"]` and three trace keys (`contagion_enabled`, `contagion_applied`, `appraisal_before_contagion`) appear only when contagion actually ran with an appraisal. Default trace remains 27 keys; default result keys are unchanged.
 - `ContagionPair(source, target, gain=..., cap=...)`: `tick_pair()` ticks source then target; `tick_target()` ticks only B. Constructor rejects the same engine and shared `state` / `memory` / `scars` / `tolerance`; shared `Personality` is allowed because it is read-only.
 - `respond()` / `respond_llm()` forward an optional `contagion_bias`; LLM output still only affects `utterance`.
 - No snapshot / memory schema change (`SNAPSHOT_VERSION == 2`, `MEMORY_SCHEMA_VERSION == 1`); contagion is per-tick input, never persisted or stored as memory.
-- 55 tests: `test_l7_contagion.py` (14) + `test_l7_integration.py` (13) + `test_l7_1_bidirectional.py` (14) + `test_l7_2_relationship_model.py` (14). Demo: `scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`. Details: `docs/L7_MULTI_CHARACTER.md`.
-- Deferred: directional relationship models, population propagation / decay.
+- 98 tests: `test_l7_contagion.py` (14) + `test_l7_integration.py` (13) + `test_l7_1_bidirectional.py` (14) + `test_l7_2_relationship_model.py` (14) + `test_l7_3_network.py` (22) + `test_l7_4_directional.py` (21). Demos: `scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`, `scripts/contagion_network_demo.py`. Details: `docs/L7_MULTI_CHARACTER.md`.
+- Deferred: structured relationship history, group-level normalization, learned relationship models.
 
 ### Core data flow
 
@@ -247,7 +251,7 @@ applies boundary/interactions, and detects shock — pre-L3 behavior for exact A
 | `ToleranceState` (`tolerance.py`) | Window of tolerance. Negative-only load, four-domain capacity weighted into `capacity`, typed scar compression, two-tick hysteresis, hyper/hypo control multipliers. `capacity_model="scalar"` reproduces pre-L5. |
 | `RelationshipMemoryStore` / `MemoryService` (`memory.py`) | Relationship-scoped long-term memory: cards, facts, relationship summary, open loops. SQLite FTS5 + CJK bigrams. |
 | `SensitizationStore` | Kindling (Post 1992) + Bayesian threat (MindLAB 2024). Pattern matching on Appraisal. |
-| `ContagionPair` (`contagion.py`) | L7 orchestrator between two isolated engines. `tick_pair()` is one-way A → B; `tick_bidirectional()` exchanges input-appraisal biases both ways. `strength` scales the gain; `auto_strength` derives it from trust / love. Never mutates either engine's personality. |
+| `ContagionPair` / `ContagionNetwork` / `DirectionalRelationship` (`contagion.py`) | L7 orchestration between isolated engines. Pair: one-way `tick_pair()` / two-way `tick_bidirectional()`; `strength` scales gain; `auto_strength` derives it from trust / love; `directional` uses independent A→B / B→A strengths. Network: directed multi-hop propagation with `hop_decay` / `max_hops`. Never mutates engine personality or state. |
 
 ### Channel taxonomy
 
@@ -311,7 +315,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 55 dedicated tests, and all six existing goldens remaining unchanged when contagion is off.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 98 dedicated tests, and all six existing goldens remaining unchanged when contagion is off.
 
 ## Related files (Desktop, not in repo)
 

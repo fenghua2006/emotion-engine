@@ -19,7 +19,7 @@
 | **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0 + L5.1） | 双 golden；四域容量；L4 后 285 tests |
 | **P0** | 可维护性护栏 | ✅ 2026-10-27 | tick 拆分 / 表达&LLM 分层 / ruff+coverage+CI / schema 版本；285 tests |
 | **L6** | 表达 / LLM / JEV / MCP | ✅ 2026-10-27（v0） | 规则优先 + LLM 可选回退；Noul 边界信号；MCP stdio；338 tests |
-| **L7** | 多角色情绪感染 | ✅ 2026-10-27（v0 + v0.1 + v0.2） | 单向 A→B + 双向 A↔B；四维有界先验；显式 / 自动关系强度；默认路径零变化；393 tests |
+| **L7** | 多角色情绪感染 | ✅ 2026-10-27（v0 + v0.1 + v0.2 + v0.3 + v0.4） | 单向 / 双向 / 群体网络；四维有界先验；显式 / 自动 / 方向性关系强度；默认路径零变化；436 tests |
 
 ## L0：核心情绪线 ✅
 
@@ -454,13 +454,14 @@ L1/L2/L5 六套 golden 无 diff
 - 反讽、长距离指代与复杂否定的语义评估；
 - JEV 规则词典的系统化扩充与标注集评估；
 - 表达侧消费 L3.5 的 `expression_gain` / `display_rule`；
-- 群体情绪感染与角色关系网络（L7.1 已补双向与关系强度，L7.2 已补自动关系模型）。
+- 用 A 的最终表达状态而不仅是输入 appraisal 作为感染源。
 
-## L7：多角色情绪感染 ✅ v0 + v0.1 双向 + v0.2 自动关系
+## L7：多角色情绪感染 ✅ v0 + v0.1 双向 + v0.2 自动关系 + v0.3 群体传播 + v0.4 方向关系
 
 目标：让 A 的 `Appraisal` 成为 B 的有界输入，同时保持两个角色的状态、记忆、
 人格与耐受完全隔离。v0 做单向 A → B；v0.1 增加双向 A ↔ B 与关系强度；
-v0.2 从 trust / love 自动推导关系强度。
+v0.2 从 trust / love 自动推导关系强度；v0.3 增加有向多跳群体传播；
+v0.4 区分 A→B 与 B→A 的方向性关系强度。
 
 交付：
 
@@ -480,6 +481,14 @@ v0.2 从 trust / love 自动推导关系强度。
     [0, 2] 归一化），非法值按 0；
   - `ContagionPair.from_relationship()` / `auto_strength=True`：双方强度取
     平均，并在每次 `derive()` 前刷新；仍受 `cap` 限制；
+  - `ContagionEdge` / `ContagionNetwork`：有向边、多跳传播；
+    第一跳用边强度，之后每跳乘 `hop_decay`（默认 0.5），最多 `max_hops`
+    （默认 3，上限 8）；同源同目标保留最强路径，多源求和后逐维截断到
+    `±cap`；所有节点先算偏置再 tick；
+  - `DirectionalRelationship` / `directional_relationship_strength()`：
+    trust / love / familiarity 归一化加权（默认 0.6 / 0.4 / 0.2），边界条目
+    按数量乘 `1 / (1 + penalty × count)`；`directional=True` 与
+    `auto_strength=True` 互斥；
   - 不导入 `engine.py`，通过 duck typing 调用 `.tick()`。
 - `core.py`：`StepTrace` 增加 `contagion_enabled` / `contagion_applied` /
   `appraisal_before_contagion`，仅感染实际生效且 `trace=True` 时序列化。
@@ -493,9 +502,12 @@ v0.2 从 trust / love 自动推导关系强度。
 - `scripts/multi_character_demo.py`：A 经历负面事件，B 在有无感染下对比；
   `--bidirectional` 展示双向，`--strength` 展示显式关系强度，
   `--auto-strength` 展示 trust / love 自动推导。
+- `scripts/contagion_network_demo.py`：A → B → C 传播链与方向性关系强度。
 - `test_l7_contagion.py`（14）+ `test_l7_integration.py`（13）+
-  `test_l7_1_bidirectional.py`（14）+ `test_l7_2_relationship_model.py`（14）。
-- `docs/L7_MULTI_CHARACTER.md`：数据流、公式、API、双向、自动关系、隔离、限制。
+  `test_l7_1_bidirectional.py`（14）+ `test_l7_2_relationship_model.py`（14）+
+  `test_l7_3_network.py`（22）+ `test_l7_4_directional.py`（21）。
+- `docs/L7_MULTI_CHARACTER.md`：数据流、公式、API、双向、自动关系、群体传播、
+  方向关系、隔离、限制。
 
 关键口径：
 
@@ -505,26 +517,30 @@ v0.2 从 trust / love 自动推导关系强度。
 - 双向的两个偏置都来自输入 appraisal，不读取对方刚更新的情绪输出；
   跨轮反馈由调用方控制。
 - 自动关系强度只读当前 trust / love，不读历史；只放大 gain，不绕过 cap。
+- 群体网络的所有节点偏置都来自本轮输入 appraisal，先算后 tick；传播链
+  没有同 tick 反馈环。每组 `(origin, target)` 只保留最强路径，避免环放大。
+- 方向性关系是每 tick 的快照；边界只按条目数量惩罚，不建模具体边界内容。
 - 感染不写状态、记忆、`Personality`、快照、MCP；schema 版本不变。
 - 默认路径与六套 golden 逐位不变。
 
 验收结果：
 
 ```text
-55 L7 tests, OK
-393 tests total, OK
+98 L7 tests, OK
+436 tests total, OK
 ruff check . -> All checks passed
 coverage report -> 87% total（branch，gate 80）
 L1/L2/L5 六套 golden 无 diff
 demo：单向 B 四维 bias -0.08；双向 A/B 各自获得对方偏置；
       strength=0.5 时 effective_gain=0.1；auto-strength 输出 mode=auto；
-      A 不受单向感染的 B 影响
+      A 不受单向感染的 B 影响；A→B→C 时 C 再乘 hop_decay；
+      方向性关系中 A→B 与 B→A 强度不同
 ```
 
 仍未做：
 
-- 方向性关系模型（区分 A→B 与 B→A 的强度）；
-- 群体传播网络、传播链与距离衰减；
+- 结构化关系历史与学习型关系模型；
+- 群体级归一化（当前每个节点独立截断）；
 - 用 A 的最终表达状态而不仅是输入 appraisal 作为感染源。
 
 ## 顺序
@@ -535,8 +551,8 @@ L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L4 ✅ → P0 ✅ → L6 ✅ →
 
 L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L5 校准核心与
 L5.1 表达/仪表盘已完成；L4 v0.2、P0 可维护性护栏、L6（JEV / Noul / LLM /
-MCP）与 L7 v0.2（单向 + 双向感染、显式 / 自动关系强度）已完成。下一层可按需
-进入方向性关系模型 / 群体传播，或表达侧元情绪接入。
+MCP）与 L7 v0.4（单向 / 双向 / 群体感染、显式 / 自动 / 方向性关系强度）已完成。
+下一层可按需进入结构化关系历史、群体级归一化，或表达侧元情绪接入。
 
 ## 每层 Definition of Done
 

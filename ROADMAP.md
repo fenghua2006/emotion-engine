@@ -164,7 +164,7 @@
 - 53 个 L6 测试；全量 338 tests OK；ruff clean；六套 golden 无 diff
 - 详细契约见 `docs/JEV.md` / `docs/MCP.md`
 
-## v0.8 ✅ — 多角色交互（L7 v0 + v0.1 双向 + v0.2 自动关系）
+## v0.8 ✅ — 多角色交互（L7 v0 + v0.1 双向 + v0.2 自动关系 + v0.3 群体传播 + v0.4 方向关系）
 - `contagion.py`：情绪感染，A 的 `Appraisal` → B 的有界 appraisal 先验
 - 只传四维：`goal_conduciveness` / `expectedness` / `coping_potential` /
   `social_evaluation`；不传 `goal_relevance` / `other_agency`
@@ -173,17 +173,22 @@
   `strength=0` 等价于关闭感染
 - L7.2 自动关系模型：`relationship_strength()` 从 trust / love 推导强度，
   `ContagionPair.from_relationship()` / `auto_strength=True` 每次 derive 前刷新
+- L7.3 群体传播：`ContagionNetwork` + `ContagionEdge` 有向网络、多跳传播、
+  `hop_decay`（默认 0.5）与 `max_hops`（默认 3，上限 8）；先算全节点偏置再 tick
+- L7.4 方向关系：`DirectionalRelationship` 分别计算 A→B / B→A 强度，
+  trust / love / familiarity + 边界惩罚；与 `auto_strength` 互斥
 - `engine.tick(contagion_bias=...)` 插在 L4 记忆先验之后、`appraise()` 之前；
   默认路径的 result / trace 键集合不变
 - `ContagionPair`：`tick_pair()` 单向 A→B，`tick_bidirectional()` 双向 A↔B；
   双向先算双方输入偏置再 tick，顺序无关、无同 tick 反馈环
 - 拒绝同一引擎或共享 `state` / `memory` / `scars` / `tolerance`
 - 感染不写状态、记忆、`Personality`、快照或 MCP；schema 版本不变
-- 55 个 L7 测试（27 v0 + 14 双向 / 强度 + 14 自动关系）；全量 393 tests OK；
-  ruff clean；六套 golden 无 diff
-- 演示：`python scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`
+- 98 个 L7 测试（27 v0 + 14 双向 / 强度 + 14 自动关系 + 22 群体网络 + 21 方向关系）；
+  全量 436 tests OK；ruff clean；六套 golden 无 diff
+- 演示：`python scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`、
+  `python scripts/contagion_network_demo.py`
 - 详细设计见 `docs/L7_MULTI_CHARACTER.md`
-- 仍未做：方向性关系模型、群体传播 / 衰减网络
+- 仍未做：结构化关系历史、群体级归一化、学习型关系模型
 
 ## v0.9 — 角色市场
 - 社区贡献蒸馏配方

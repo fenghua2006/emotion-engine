@@ -120,6 +120,14 @@ python scripts/generate_l5_tolerance_golden.py --legacy --check
   `state.love` 推导强度；自动模式在每次 `derive()` 前刷新，仍受 `cap` 限制。
 - `tick_bidirectional()` 从双方本轮的输入 appraisal 先算出两个方向的偏置，
   再 tick A、B；没有同 tick 反馈环，结果与 tick 顺序无关。
+- `ContagionNetwork` / `ContagionEdge`：有向多跳传播；第一跳用边强度，
+  之后每跳乘 `hop_decay`（默认 0.5），最多 `max_hops`（默认 3，上限 8）；
+  同源同目标保留最强路径，多源求和后仍逐维截断到 `±cap`。所有节点先算
+  偏置再 tick，因此传播链没有同 tick 反馈。
+- `DirectionalRelationship` / `directional_relationship_strength()`：
+  分别计算 A→B 与 B→A，由 trust / love / familiarity 归一化加权，边界
+  条目按数量乘 `1 / (1 + penalty × count)`；`directional` 与
+  `auto_strength` 互斥。
 - 默认路径不新增 result / trace 键；只有感染实际运行时才追加
   `result["contagion_bias"]` 与三个 trace 字段。
 - 感染是每 tick 输入，不写入快照或记忆；`SNAPSHOT_VERSION` /
