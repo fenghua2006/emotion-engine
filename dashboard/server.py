@@ -13,7 +13,14 @@
 浏览器打开 http://localhost:9020
 """
 
-import sys, os, json, time, threading, argparse, importlib
+import sys
+import os
+import json
+import copy
+import time
+import threading
+import argparse
+import importlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -21,8 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
     EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    MemoryStoreDB, SensitizationStore, _dominant_channel, respond, respond_llm
+    MemoryStore, MemoryStoreDB, SensitizationStore, _dominant_channel,
+    respond, respond_llm
 )
+from jev import analyze as analyze_text, make_appraisal
+from noul import detect as detect_boundary
 
 # ═══════════════════════════════════════════════
 # 角色加载器
@@ -384,7 +394,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             self._do_GET_impl()
         except Exception as e:
-            import traceback, sys
+            import traceback
+            import sys
             print(f"\n[ERROR] do_GET: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
             sys.stderr.flush()
@@ -557,6 +568,68 @@ class DashboardHandler(BaseHTTPRequestHandler):
             threading.Thread(target=lambda: save_chat_message(
                 _state["char_name"], event_text, resp.get("utterance", "")
             ), daemon=True).start()
+
+        elif path == "/api/replay":
+            content_length = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(content_length).decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw_body)
+            except json.JSONDecodeError:
+                payload = {"text": raw_body}
+
+            event_text = str(payload.get("text", "")).strip()
+            appraisal_data = payload.get("appraisal")
+            if appraisal_data is not None and not isinstance(appraisal_data, dict):
+                self._send_json({"error": "appraisal must be an object"}, 400)
+                return
+            if not event_text and appraisal_data is None:
+                self._send_json({"error": "empty event"}, 400)
+                return
+
+            try:
+                appraisal = (
+                    make_appraisal(appraisal_data)
+                    if appraisal_data is not None
+                    else analyze_text(event_text).appraisal
+                )
+            except Exception as exc:
+                self._send_json({"error": f"bad appraisal: {exc}"}, 400)
+                return
+
+            with _lock:
+                source = _state["engine"]
+                # 只读回放：复制状态与耐受窗，不碰真实记忆库/快照。
+                replay_engine = copy.copy(source)
+                replay_engine.state = copy.deepcopy(source.state)
+                replay_engine.tolerance = copy.deepcopy(source.tolerance)
+                replay_engine.scars = copy.deepcopy(source.scars)
+                replay_engine._recent_shocks = list(source._recent_shocks)
+                replay_engine.memory = MemoryStore()
+                boundary_value = payload.get("boundary_violation")
+                boundary = (
+                    bool(boundary_value) if boundary_value is not None
+                    else detect_boundary(
+                        event_text, trust=source.state.trust,
+                    ).violated if event_text else False
+                )
+                local = respond(
+                    replay_engine, event_text,
+                    appraisal=appraisal,
+                    character_id=_state["char_id"],
+                    boundary_violation=boundary,
+                    trace=True,
+                )
+                replay_state = dict(replay_engine.state.to_dict())
+
+            self._send_json({
+                "replay": True,
+                "boundary_violation": boundary,
+                "trace": local.get("trace"),
+                "state": replay_state,
+                "expression": local.get("expression"),
+                "action": local.get("action"),
+                "utterance": local.get("utterance", ""),
+            })
 
         elif path == "/api/reset":
             char_id = _state["char_id"]
@@ -759,12 +832,12 @@ def main():
     global _no_save
     _no_save = args.no_save
     print(f"\n{'='*50}")
-    print(f"  Emotion Engine 仪表盘")
+    print("  Emotion Engine 仪表盘")
     print(f"  http://localhost:{port}")
     print(f"{'='*50}")
     print(f"  角色: {char_name} ({char_id})")
     print(f"  存档: {'关闭' if _no_save else SAVE_PATH}")
-    print(f"  Ctrl+C 停止\n")
+    print("  Ctrl+C 停止\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

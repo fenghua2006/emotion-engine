@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 uv.lock
+.coverage
+htmlcov/
+.ruff_cache/
 *.db
 *.db-shm
 *.db-wal

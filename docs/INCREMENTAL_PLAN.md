@@ -15,9 +15,10 @@
 | **L2** | trust / love / longing / guilt | ✅ 2026-10-26 | 19 条事件双 golden；32 个 L2 测试；trust 30 天不发散；guilt 门槛锁定 |
 | **L3** | 氛围与伤疤 | ✅ 2026-10-26 | 顺序修正可 A/B；shock 密度非零；伤疤三通道 ≤60%；166 tests |
 | **L3.5** | 元情绪：二阶评估与调节意图 | ✅ 2026-10-26（v0 trace-only） | 不新增通道；关闭时四套 golden 与 L3 A/B 不变；191 tests |
-| **L4** | 关系域记忆 | ⏳ | 记忆不写 Personality；预算可控 |
-| **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0 + L5.1） | 双 golden；四域容量；241 tests |
-| **L6** | 表达 / LLM / JEV / MCP | ⏳ | 全链路可回退、可观测 |
+| **L4** | 关系域记忆 | ✅ 2026-10-27（v0.2） | 先验只进 Appraisal；摘要 / 闸门 / 迁移；285 tests |
+| **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0 + L5.1） | 双 golden；四域容量；L4 后 285 tests |
+| **P0** | 可维护性护栏 | ✅ 2026-10-27 | tick 拆分 / 表达&LLM 分层 / ruff+coverage+CI / schema 版本；285 tests |
+| **L6** | 表达 / LLM / JEV / MCP | ✅ 2026-10-27（v0） | 规则优先 + LLM 可选回退；Noul 边界信号；MCP stdio；338 tests |
 
 ## L0：核心情绪线 ✅
 
@@ -252,7 +253,8 @@ legacy 同事件逐值保留：atmosphere -0.3774803783593781，
 - 不新增情绪通道；不接 JEV / LLM 生成元情绪；不改 tolerance 参数；
   不持久化 meta state / profile / enable 开关；不新增 golden，不重新生成 fixtures。
 - L3.5 当时 `tolerance_load_bias`、`expression_gain`、`display_rule` 均为观测值；
-  L5 已为 tolerance load 新增默认关闭的开关，L6 仍负责表达侧接入。
+  L5 已为 tolerance load 新增默认关闭的开关；表达侧（`expression_gain` /
+  `display_rule`）仍未接入。
 
 验收结果：
 
@@ -270,16 +272,48 @@ L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
 
 详细设计见 [`META_EMOTION.md`](META_EMOTION.md)。
 
-## L4：关系域记忆
+## L4：关系域记忆 ✅ v0.2
 
-1. `memory_bias()` 接入 `Appraisal`，上限 ±0.2。
-2. 关系摘要自动更新。
-3. 写入闸门 v2：去重、冲突、时效、置信度。
-4. 旧 `MemoryStoreDB` 迁移或退役。
-5. prompt 预算压测 ≤1200 字。
-6. 有记忆 / 无记忆消融实验。
+交付：
 
-验收：记忆只影响 appraisal / relationship / prompt，不写 `Personality`；100 轮后 prompt 仍 ≤1200 字。
+- `core.py`：`apply_appraisal_bias()` 只改六维 `Appraisal`；
+  每维先按 `cap=0.2` 截断，再按合法范围 clamp；`Appraisal.to_dict()`。
+- `engine.py`：
+  - `tick(appraisal_bias=...)` 在 `appraise()` 前叠加先验；
+  - 没有 `Appraisal` 时不拉状态；
+  - 默认 trace 键集合不变；只在先验存在时追加
+    `memory_bias_enabled / memory_bias_applied / appraisal_before_memory`；
+  - `respond()` / `respond_llm()` 支持显式 `appraisal` 与记忆先验透传；
+  - 回复后写记忆时携带 `appraisal` 快照。
+- `memory.py`：
+  - `appraisal_prior()`：卡片六维评估减去中性基线后加权平均，±0.2；
+  - `memory_prior()`：同时返回六维与十通道先验；
+  - `MemoryWriteGate`：置信度、去重、冲突、开放循环去重、轮次预算；
+  - `compose_relationship_summary()` / `update_relationship_summary()`：
+    确定性摘要，每次成功写入后自动刷新；
+  - `migrate_legacy_memories()`：旧 `emotion.db` → 关系域记忆，可重复执行。
+- `scripts/migrate_legacy_memory.py`：迁移 CLI，支持 `--dry-run`。
+- `test_l4_memory_integration.py`：27 个测试。
+
+验收结果：
+
+```text
+appraisal prior signed / capped ±0.2 / user isolated
+有先验 vs 无先验：state 改变，Personality 逐值不变
+无 Appraisal 时先验不拉状态
+默认 trace 无 memory 键；有先验只多 3 键
+100 轮后 prompt ≤1200 字；有/无记忆消融通过
+摘要自动刷新；闸门去重 / supersede / 轮次预算通过
+旧库迁移二次执行 migrated=0，skipped_duplicate=1
+全套 285 tests OK；L1/L2/L5 六套 golden 无 diff
+```
+
+仍未做：
+
+- 文本 → `Appraisal` 的 JEV 已由 L6 补齐（`jev.py`，默认关闭、可回退）；
+  记忆先验仍需显式 `Appraisal` 才能生效。
+- 摘要的 LLM 叙事版；规则版只压缩结构化信息。
+- 旧 `MemoryStoreDB` 的自动退役；目前只提供迁移工具。
 
 ## L5：耐受校准 ✅ v0（校准核心）
 
@@ -321,7 +355,7 @@ L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
 验收结果：
 
 ```text
-38 L5 tests, OK；L5.1 追加 12 tests；全套 241 tests, OK
+38 L5 tests, OK；L5.1 追加 12 tests；L4 后全套 285 tests, OK
 两套 golden 通过；L1/L2 四套 golden 无 diff
 calm current capacity 0.862350；legacy 0.857500
 anger_hyper: 1 tick pending → 2 tick hyper
@@ -338,7 +372,7 @@ L5.1 ✅ 已补（表达 / 仪表盘）：
 - 仪表盘 tolerance 区间带、load / capacity / 四域折线；
 - hyper / hypo 本地表达模板、Live2D 与 `_action_tendency` 一致性；
 - `regulated` 的表情映射保持逐值不变，新修正只作用于 hyper / hypo；
-- 12 个 L5.1 测试，全量 241 tests OK。
+- 12 个 L5.1 测试；L4 后全量 285 tests OK。
 
 仍未做：
 
@@ -348,27 +382,88 @@ L5.1 ✅ 已补（表达 / 仪表盘）：
 
 详细记录见 [`TOLERANCE.md`](TOLERANCE.md)。
 
-## L6：表达 / LLM / JEV / MCP
+## P0：可维护性护栏 ✅
 
-1. JEV：开放文本 → 六维 `Score` → `Appraisal` + confidence + evidence。
-2. 低置信度 / 冲突回退规则或 LLM；固定模型版本。
-3. `Noul` 检测边界侵犯。
-4. LLM 只表达，不把输出写回通道。
-5. MCP：`tick` / `recall` / `state`。
-6. 仪表盘展示 `StepTrace`，可回放一次事件。
-7. JEV 成本护栏：缓存、批量、超时、fallback。
+交付：
 
-验收：JEV 不可用时全链路仍可运行；LLM 不改变 Personality 或核心公式；MCP 可被 Claude Code / Codex 直接调用。
+- `engine.py`：`tick()` 只做编排；实际阶段拆为 `_begin_tick` / `_step_decay` /
+  `_step_slow_channels` / `_step_appraisal` / `_step_after_appraisal` /
+  `_step_interactions` / `_step_shock` / `_step_memory_and_saga` /
+  `_step_meta_and_tolerance` / `_build_tick_result`。
+- `expression.py`：动作倾向、台词池、情绪快照、mood hint、LLM prompt、Live2D 参数；
+  `engine.py` 继续 re-export 旧名字。
+- `llm_client.py`：主 API → fallback → `(None, None)`；不读取引擎状态。
+- 快照：`SNAPSHOT_VERSION`（当前 2）+ `_migrate_snapshot_payload()`；
+  直接通道字典 / 无版本 payload 迁移到 v2，未来版本拒绝加载。
+- 记忆：`MEMORY_SCHEMA_VERSION`（当前 1）+ `PRAGMA user_version` +
+  `_migrate_schema()`；旧库 0 → 1，未来版本抛 `RuntimeError`。
+- `pyproject.toml`：ruff `E`/`F`（忽略 `E501`）、coverage branch、gate 80%。
+- `.github/workflows/ci.yml`：ruff → unittest → coverage → 六套 golden。
+- `test_p0_maintainability.py`：17 个测试（表达层边界、LLM 无 key/fallback、
+  tick 顺序、trace 阶段、快照版本、记忆 schema 版本）。
+
+验收：
+
+```text
+285 tests OK
+ruff check . -> All checks passed
+coverage total 86%（branch，核心模块；gate 80%）
+L1/L2/L5 六套 golden 无 diff
+```
+
+详细分层、tick 顺序和修改检查表见 `docs/ARCHITECTURE.md`。
+
+## L6：表达 / LLM / JEV / MCP ✅
+
+交付：
+
+- `jev.py`：开放文本 → 六维 `Appraisal` + confidence + evidence。
+  规则优先，低置信度（默认 `<0.45`）或显式 `force_llm=True` 时才可选 LLM；
+  `JEVResult` 携带 `source`（rules / llm / fallback）与 `cached`。
+- 成本护栏：有界 LRU（默认 256）、`analyze_many` 按 `max_batch=64` 分块、
+  8s 超时、异常 / 无 key / JSON 失败全部回退规则结果；输出统一 clamp。
+- `noul.py`：亲密 / 命令 / 侮辱 / 胁迫 / 威胁五类文本边界信号；
+  亲密权重随 `trust` 变化；只读文本，不写状态或记忆。
+- `engine.respond_llm(..., use_jev=False, jev=None, auto_boundary=False,
+  boundary_violation=None, trace=False)` 与 `respond(..., boundary_violation,
+  trace)`；新参数默认关闭，旧调用逐位不变；失败写 `_jev_error` /
+  `_boundary_error`，主链路继续。
+- LLM 只进入 `utterance`，不写回通道、`Personality` 或核心公式。
+- `mcp_server.py`：零依赖 stdio JSON-RPC，`tick` / `recall` / `state`；
+  记忆懒加载并按 `(character_id, user_id)` 隔离；可直接被 Claude Code /
+  Codex 调用。
+- `scripts/replay_trace.py` + 仪表盘 `POST /api/replay`：用只读副本回放一轮，
+  不改真实引擎 / 快照 / 记忆。
+- 测试：`test_l6_jev.py`（22）、`test_l6_integration.py`（15）、
+  `test_l6_mcp.py`（16）；文档 `docs/JEV.md` / `docs/MCP.md`。
+
+验收结果：
+
+```text
+338 tests OK
+ruff check . -> All checks passed
+JEV 无 key / 超时 / 异常时全链路仍可运行
+LLM 前后 Personality 逐值不变
+MCP initialize / tools/list / tools/call / stdio 子进程往返通过
+L1/L2/L5 六套 golden 无 diff
+```
+
+仍未做：
+
+- 反讽、长距离指代与复杂否定的语义评估；
+- JEV 规则词典的系统化扩充与标注集评估；
+- 表达侧消费 L3.5 的 `expression_gain` / `display_rule`；
+- 多角色情绪感染（L7+）。
 
 ## 顺序
 
 ```text
-L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L6
-                         └→ L4 → L6
+L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L4 ✅ → P0 ✅ → L6 ✅
 ```
 
-L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L5 校准核心已完成，
-L4 仍待开始；L6 最后。L5.1（仪表盘 / 表达一致性）可在 L4 前后并行。
+L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L5 校准核心与
+L5.1 表达/仪表盘已完成；L4 v0.2、P0 可维护性护栏与 L6（JEV / Noul / LLM /
+MCP）已完成。下一层可按需进入多角色交互或表达侧元情绪接入。
 
 ## 每层 Definition of Done
 

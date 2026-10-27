@@ -12,12 +12,12 @@
   500年的面具从未摘下。这是引擎的终极测试: 人格不变，面具在叠。
 """
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
-    EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    MemoryStore, SensitizationStore, FAST_CHANNELS, MetaEmotionProfile
+    EmotionEngine, EmotionalState, Personality, Appraisal, MemoryStore, SensitizationStore, MetaEmotionProfile
 )
 
 furina_name = "芙宁娜"
@@ -182,7 +182,6 @@ def create_furina(
 # ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import time
 
     f = create_furina()
 
@@ -241,9 +240,9 @@ if __name__ == "__main__":
     wake_result = f.wake()
     print(f"  offline (simulated): {wake_result['offline_minutes']:.0f} min")
     print(f"  longing after eons alone: {f.state.longing:.3f}")
-    print(f"  [500 years of isolation — the fountain whispers: '好漫长...好孤独...还要多久...']")
+    print("  [500 years of isolation — the fountain whispers: '好漫长...好孤独...还要多久...']")
 
     print("\n=== Furina: The Mask vs The Self ===")
     ks = f.state.to_dict()
     print(f"  joy={ks['joy']:.2f} sad={ks['sadness']:.2f} fear={ks['fear']:.2f} trust={ks['trust']:.2f}")
-    print(f"  The performance is over. She is finally just herself.")
+    print("  The performance is over. She is finally just herself.")

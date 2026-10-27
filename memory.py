@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import sqlite3
 import time
@@ -35,6 +36,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 DEFAULT_DB_PATH = "memory.db"
+# SQLite PRAGMA user_version：0 = L4 之前的旧库；1 = 当前基线 schema。
+# 每次改表结构时递增，并在 RelationshipMemoryStore._migrate_schema()
+# 里补一段 from_version < N 的迁移。
+MEMORY_SCHEMA_VERSION = 1
 
 CHANNELS = (
     "joy", "sadness", "anger", "fear", "love",
@@ -55,6 +60,27 @@ KIND_IMPORTANCE = {
 }
 
 DEFAULT_RELATIONSHIP_SUMMARY = ""
+
+# L4: 六维 Appraisal 是记忆先验唯一允许进入的接口。
+APPRAISAL_DIMS = (
+    "goal_relevance",
+    "goal_conduciveness",
+    "expectedness",
+    "coping_potential",
+    "other_agency",
+    "social_evaluation",
+)
+
+# 中性事件的评估基线。记忆卡片存的是事件当时的绝对值，
+# 先减去中性基线，才得到“这段记忆把下一次评估往哪边推”。
+APPRAISAL_NEUTRAL = {
+    "goal_relevance": 0.0,
+    "goal_conduciveness": 0.0,
+    "expectedness": 0.5,
+    "coping_potential": 0.5,
+    "other_agency": 0.0,
+    "social_evaluation": 0.0,
+}
 
 _STOPWORDS = {
     "的", "了", "是", "我", "你", "他", "她", "它", "在", "有", "和",
@@ -162,6 +188,27 @@ class MemoryCandidate:
     category: str = "general"
     confidence: float = 0.7
     tags: List[str] = field(default_factory=list)
+
+
+@dataclass
+class MemoryPrior:
+    """一次召回得到的只读先验。
+
+    appraisal 进入 engine.tick(appraisal_bias=...)，channels 保留给
+    relationship / prompt 侧使用；两者都不能直接写情绪状态或人格。
+    """
+
+    appraisal: Dict[str, float] = field(default_factory=dict)
+    channels: Dict[str, float] = field(default_factory=dict)
+    card_count: int = 0
+    total_weight: float = 0.0
+
+
+@dataclass
+class GateDecision:
+    accept: bool
+    reason: str
+    action: str = "write"
 
 
 # ══════════════════════════════════════════════════════
@@ -276,6 +323,17 @@ def _lexical_score(query_tokens: Iterable[str], doc_tokens: Iterable[str]) -> fl
     return len(query_set & doc_set) / float(len(query_set))
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, float(value)))
+
+
+def _jaccard(left: Iterable[str], right: Iterable[str]) -> float:
+    a, b = set(left), set(right)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / float(len(a | b))
+
+
 def _truncate_to_budget(lines: Sequence[str], budget_chars: int,
                         reserved_suffix: str = "") -> str:
     """按字符预算拼 prompt，保留末尾行为提醒。"""
@@ -314,11 +372,25 @@ class RelationshipMemoryStore:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self._fts = False
-        self._init_schema()
+        self.schema_version = MEMORY_SCHEMA_VERSION
+        try:
+            self._init_schema()
+        except Exception:
+            self.db.close()
+            raise
 
     # ── schema ──────────────────────────────────────────
 
     def _init_schema(self) -> None:
+        current_version = int(
+            self.db.execute("PRAGMA user_version").fetchone()[0]
+        )
+        if current_version > MEMORY_SCHEMA_VERSION:
+            raise RuntimeError(
+                "memory schema is newer than this code: "
+                f"db={current_version}, code={MEMORY_SCHEMA_VERSION}"
+            )
+
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS memory_cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -393,7 +465,19 @@ class RelationshipMemoryStore:
                 ON open_loops(character_id, user_id, status);
         """)
         self.db.commit()
+        self._migrate_schema(current_version)
+        self.db.execute(f"PRAGMA user_version = {MEMORY_SCHEMA_VERSION}")
+        self.db.commit()
         self._init_fts()
+
+    def _migrate_schema(self, from_version: int) -> None:
+        """按 PRAGMA user_version 执行迁移。
+
+        0 -> 1：L4 之前的库没有版本号；上面的 CREATE TABLE IF NOT EXISTS
+        已经补齐基线表，无需 ALTER。未来版本在这里追加 from_version < N。
+        """
+        if from_version < 1:
+            pass
 
     def _init_fts(self) -> None:
         """FTS5 只做 lexical 索引；中文先转成 bigram 再写入。"""
@@ -581,6 +665,106 @@ class RelationshipMemoryStore:
             last_confirmed=row["last_confirmed"],
         )
 
+    # ── weighted recall helpers ─────────────────────────
+
+    def _weighted_cards(self, character_id: str, user_id: str,
+                        tau_days: float = 30.0,
+                        now: Optional[float] = None):
+        """返回 (card, weight) 列表与总权重；只读，不更新 access_count。"""
+        now = now or time.time()
+        rows = self.db.execute(
+            """SELECT * FROM memory_cards
+               WHERE character_id=? AND user_id=? AND status='active'
+                 AND scope IN ('relation', 'self')""",
+            (character_id, user_id),
+        ).fetchall()
+        weighted = []
+        total_weight = 0.0
+        for row in rows:
+            card = self._row_to_card(row)
+            age_days = max(0.0, now - card.created_at) / 86400.0
+            weight = (float(card.salience) * float(card.confidence)
+                      * math.exp(-age_days / max(1.0, tau_days)))
+            if weight <= 0:
+                continue
+            weighted.append((card, weight))
+            total_weight += weight
+        return weighted, total_weight
+
+    def recent_cards(self, character_id: str, user_id: str,
+                     days: float = 7.0, limit: int = 50,
+                     now: Optional[float] = None) -> List[MemoryCard]:
+        """写入闸门用：取最近一段时间的活跃卡片。"""
+        now = now or time.time()
+        cutoff = now - max(0.0, days) * 86400.0
+        rows = self.db.execute(
+            """SELECT * FROM memory_cards
+               WHERE character_id=? AND user_id=? AND status='active'
+                 AND created_at>=?
+               ORDER BY created_at DESC LIMIT ?""",
+            (character_id, user_id, cutoff, int(limit)),
+        ).fetchall()
+        return [self._row_to_card(row) for row in rows]
+
+    def has_card_raw_ref(self, character_id: str, user_id: str,
+                         raw_ref: str) -> bool:
+        row = self.db.execute(
+            """SELECT 1 FROM memory_cards
+               WHERE character_id=? AND user_id=? AND raw_ref=? LIMIT 1""",
+            (character_id, user_id, raw_ref),
+        ).fetchone()
+        return row is not None
+
+    def appraisal_prior(self, character_id: str, user_id: str,
+                        tau_days: float = 30.0, cap: float = 0.2,
+                        now: Optional[float] = None) -> Dict[str, float]:
+        """把记忆卡片里的六维 appraisal 压成有界先验。
+
+        L4 的唯一入口：返回六维偏移，交给 core.apply_appraisal_bias()。
+        没有任何带 appraisal 的卡片时返回全零，不伪造先验。
+        """
+        weighted, total_weight = self._weighted_cards(
+            character_id, user_id, tau_days=tau_days, now=now,
+        )
+        totals = {dim: 0.0 for dim in APPRAISAL_DIMS}
+        weight_with_appraisal = 0.0
+        for card, weight in weighted:
+            snapshot = card.appraisal or {}
+            if not any(dim in snapshot for dim in APPRAISAL_DIMS):
+                continue
+            weight_with_appraisal += weight
+            for dim in APPRAISAL_DIMS:
+                value = float(snapshot.get(dim, APPRAISAL_NEUTRAL[dim]))
+                totals[dim] += (value - APPRAISAL_NEUTRAL[dim]) * weight
+
+        if weight_with_appraisal <= 0 or total_weight <= 0:
+            return {dim: 0.0 for dim in APPRAISAL_DIMS}
+
+        return {
+            dim: _clamp(totals[dim] / weight_with_appraisal, -cap, cap)
+            for dim in APPRAISAL_DIMS
+        }
+
+    def memory_prior(self, character_id: str, user_id: str,
+                     baseline: Optional[Dict[str, float]] = None,
+                     tau_days: float = 30.0, cap: float = 0.2,
+                     now: Optional[float] = None) -> MemoryPrior:
+        """一次返回六维 appraisal 先验与十通道情绪先验。"""
+        weighted, total_weight = self._weighted_cards(
+            character_id, user_id, tau_days=tau_days, now=now,
+        )
+        return MemoryPrior(
+            appraisal=self.appraisal_prior(
+                character_id, user_id, tau_days=tau_days, cap=cap, now=now,
+            ),
+            channels=self.memory_bias(
+                character_id, user_id, baseline=baseline,
+                tau_days=tau_days, cap=cap, now=now,
+            ),
+            card_count=len(weighted),
+            total_weight=total_weight,
+        )
+
     # ── relationship ────────────────────────────────────
 
     def get_relationship(self, character_id: str, user_id: str) -> RelationshipState:
@@ -641,6 +825,72 @@ class RelationshipMemoryStore:
         )
         self.db.commit()
         return self.get_relationship(character_id, user_id)
+
+    def compose_relationship_summary(self, character_id: str, user_id: str,
+                                     max_chars: int = 160) -> str:
+        """用事实 / 边界 / 开放循环 / 高显著卡片生成确定性摘要。
+
+        不调用 LLM，也不读原文；同一份数据永远得到同一句话。
+        """
+        facts = self.get_facts(character_id, user_id)
+        loops = self.get_open_loops(character_id, user_id, limit=3)
+        cards = self.recent_cards(
+            character_id, user_id, days=36500.0, limit=20,
+        )
+
+        identity = next(
+            (fact.value for fact in facts
+             if fact.key == "identity.name" and fact.value),
+            "",
+        )
+        preferences = [
+            fact.value for fact in facts
+            if fact.key.startswith("preference.") and fact.value
+        ][:2]
+        boundaries = [
+            fact.value for fact in facts
+            if fact.category == "boundary" and fact.value
+        ][:2]
+
+        parts: List[str] = []
+        if identity:
+            parts.append(f"名字：{identity}")
+        if preferences:
+            parts.append("偏好：" + "、".join(preferences))
+        if boundaries:
+            parts.append("边界：" + "、".join(boundaries))
+        if loops:
+            parts.append("未闭环：" + "、".join(
+                loop.summary for loop in loops[:2] if loop.summary
+            ))
+        if not parts and cards:
+            top = max(cards, key=lambda card: (
+                float(card.salience), float(card.confidence),
+                float(card.created_at),
+            ))
+            parts.append("记得：" + top.summary[:60])
+
+        summary = "；".join(part for part in parts if part)
+        max_chars = max(20, int(max_chars))
+        if len(summary) > max_chars:
+            summary = summary[:max_chars - 1] + "…"
+        return summary
+
+    def update_relationship_summary(self, character_id: str, user_id: str,
+                                    max_chars: int = 160,
+                                    force: bool = False,
+                                    now: Optional[float] = None) -> str:
+        """自动刷新关系摘要；数据没有变化时不写库。"""
+        summary = self.compose_relationship_summary(
+            character_id, user_id, max_chars=max_chars,
+        )
+        current = self.get_relationship(character_id, user_id)
+        if not force and (not summary or summary == current.summary):
+            return current.summary
+        self.update_relationship(
+            character_id, user_id, summary=summary, now=now,
+        )
+        return summary
 
     # ── open loops ──────────────────────────────────────
 
@@ -917,21 +1167,12 @@ class RelationshipMemoryStore:
         """
         now = now or time.time()
         baseline = baseline or {}
-        rows = self.db.execute(
-            """SELECT * FROM memory_cards
-               WHERE character_id=? AND user_id=? AND status='active'
-                 AND scope IN ('relation', 'self')""",
-            (character_id, user_id),
-        ).fetchall()
+        weighted, total_weight = self._weighted_cards(
+            character_id, user_id, tau_days=tau_days, now=now,
+        )
 
         totals = {channel: 0.0 for channel in CHANNELS}
-        total_weight = 0.0
-        for row in rows:
-            card = self._row_to_card(row)
-            age_days = max(0.0, now - card.created_at) / 86400.0
-            weight = (float(card.salience) * float(card.confidence)
-                      * math.exp(-age_days / max(1.0, tau_days)))
-            total_weight += weight
+        for card, weight in weighted:
             for channel in CHANNELS:
                 value = float(card.emotion_snap.get(channel, 0.0))
                 base = float(baseline.get(channel, 0.0))
@@ -1108,6 +1349,90 @@ class MemoryExtractor:
 
 
 # ══════════════════════════════════════════════════════
+# 写入闸门 v2
+# ══════════════════════════════════════════════════════
+
+class MemoryWriteGate:
+    """写入前的确定性闸门：去重、冲突、时效、置信度。
+
+    v0.1 只做规则判断，不调用模型：
+      - explicit / boundary / identity 高优先；
+      - 低置信度候选丢弃；
+      - 同一 key 的新事实允许 supersede；
+      - 近期卡片摘要 Jaccard 过高视为重复；
+      - 开放循环同样去重。
+    """
+
+    def __init__(self, min_confidence: float = 0.55,
+                 dedupe_days: float = 7.0,
+                 similarity_threshold: float = 0.8):
+        self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
+        self.dedupe_days = max(0.0, float(dedupe_days))
+        self.similarity_threshold = max(
+            0.0, min(1.0, float(similarity_threshold)),
+        )
+
+    def decide(self, candidate: MemoryCandidate,
+               store: RelationshipMemoryStore,
+               character_id: str, user_id: str,
+               now: Optional[float] = None) -> GateDecision:
+        now = now or time.time()
+        tags = set(candidate.tags or [])
+
+        # 明确要求记住 / 边界 / 身份：即使置信度略低也保留。
+        if "explicit" in tags or candidate.kind == "note":
+            return GateDecision(True, "explicit", "card")
+        if candidate.category in ("identity", "boundary"):
+            if candidate.confidence < 0.5:
+                return GateDecision(False, "low_confidence", "skip")
+            return GateDecision(True, "high_priority", "write")
+
+        if candidate.confidence < self.min_confidence:
+            return GateDecision(False, "low_confidence", "skip")
+
+        if candidate.kind == "promise":
+            query_tokens = tokenize(candidate.summary)
+            for loop in store.get_open_loops(character_id, user_id, limit=30):
+                if _jaccard(
+                    query_tokens, tokenize(loop.summary),
+                ) >= self.similarity_threshold:
+                    return GateDecision(
+                        False, "duplicate_open_loop", "skip",
+                    )
+            return GateDecision(True, "commitment", "open_loop")
+
+        if candidate.fact_key:
+            existing = store.get_facts(character_id, user_id)
+            for fact in existing:
+                if fact.key != _normalize_key(candidate.fact_key):
+                    continue
+                if fact.value.strip() == (
+                    candidate.fact_value or candidate.summary
+                ).strip():
+                    return GateDecision(
+                        True, "confirm_existing", "fact",
+                    )
+                return GateDecision(
+                    True, "supersede_existing", "fact",
+                )
+            return GateDecision(True, "new_fact", "fact")
+
+        candidate_tokens = tokenize(candidate.summary)
+        for card in store.recent_cards(
+            character_id, user_id, days=self.dedupe_days, now=now,
+        ):
+            similarity = _jaccard(
+                candidate_tokens, tokenize(card.summary),
+            )
+            if similarity >= self.similarity_threshold:
+                return GateDecision(
+                    False, "duplicate_card", "skip",
+                )
+
+        return GateDecision(True, "novel_card", "card")
+
+
+# ══════════════════════════════════════════════════════
 # Service
 # ══════════════════════════════════════════════════════
 
@@ -1115,23 +1440,54 @@ class MemoryService:
     """把「抽取 → 入库 → 召回 → prompt 区块」串起来。"""
 
     def __init__(self, store: Optional[RelationshipMemoryStore] = None,
-                 extractor: Optional[MemoryExtractor] = None):
+                 extractor: Optional[MemoryExtractor] = None,
+                 gate: Optional[MemoryWriteGate] = None,
+                 auto_summary: bool = True,
+                 max_writes_per_turn: int = 4):
         self.store = store or RelationshipMemoryStore()
         self.extractor = extractor or MemoryExtractor()
+        self.gate = gate or MemoryWriteGate()
+        self.auto_summary = bool(auto_summary)
+        self.max_writes_per_turn = max(1, int(max_writes_per_turn))
+        self.last_gate_decisions: List[Dict[str, str]] = []
 
     def remember_turn(self, character_id: str, user_id: str, user_text: str,
                       assistant_text: str = "",
                       appraisal: Any = None,
                       emotion_snap: Any = None,
-                      raw_ref: Optional[str] = None) -> List[Dict[str, Any]]:
+                      raw_ref: Optional[str] = None,
+                      now: Optional[float] = None) -> List[Dict[str, Any]]:
         """回复之后异步调用。只存抽取到的候选，不存整段对话。"""
+        now = now or time.time()
         candidates = self.extractor.extract(user_text)
         appraisal_dict = _as_dict(appraisal)
         emotion_dict = _as_dict(emotion_snap)
         salience = _salience_from_emotion(emotion_dict)
         stored: List[Dict[str, Any]] = []
+        self.last_gate_decisions = []
+        accepted = 0
 
         for candidate in candidates:
+            if accepted >= self.max_writes_per_turn:
+                self.last_gate_decisions.append({
+                    "summary": candidate.summary,
+                    "reason": "turn_budget",
+                    "action": "skip",
+                })
+                continue
+
+            decision = self.gate.decide(
+                candidate, self.store, character_id, user_id, now=now,
+            )
+            self.last_gate_decisions.append({
+                "summary": candidate.summary,
+                "reason": decision.reason,
+                "action": decision.action,
+            })
+            if not decision.accept:
+                continue
+            accepted += 1
+
             if candidate.kind == "promise":
                 loop_id = self.store.add_open_loop(
                     candidate.summary,
@@ -1151,6 +1507,7 @@ class MemoryService:
                     category=candidate.category,
                     confidence=candidate.confidence,
                     evidence=[raw_ref] if raw_ref else [],
+                    now=now,
                 )
                 stored.append({"type": "fact", "id": fact_id})
                 continue
@@ -1167,9 +1524,12 @@ class MemoryService:
                 confidence=candidate.confidence,
                 source="user_said",
                 raw_ref=raw_ref,
+                created_at=now,
             ))
             stored.append({"type": "card", "id": card_id})
 
+        if stored and self.auto_summary:
+            self.refresh_summary(character_id, user_id, now=now)
         return stored
 
     def remember_event(self, character_id: str, user_id: str, summary: str,
@@ -1181,8 +1541,10 @@ class MemoryService:
                        confidence: float = 0.85,
                        source: str = "observed",
                        raw_ref: Optional[str] = None,
-                       created_at: Optional[float] = None) -> int:
-        return self.store.add_card(MemoryCard(
+                       created_at: Optional[float] = None,
+                       now: Optional[float] = None) -> int:
+        created_at = created_at or now or time.time()
+        card_id = self.store.add_card(MemoryCard(
             summary=summary,
             character_id=character_id,
             user_id=user_id,
@@ -1194,8 +1556,39 @@ class MemoryService:
             confidence=confidence,
             source=source,
             raw_ref=raw_ref,
-            created_at=created_at or time.time(),
+            created_at=created_at,
         ))
+        if self.auto_summary:
+            self.refresh_summary(character_id, user_id, now=created_at)
+        return card_id
+
+    def appraisal_prior(self, character_id: str, user_id: str,
+                        tau_days: float = 30.0, cap: float = 0.2,
+                        now: Optional[float] = None) -> Dict[str, float]:
+        """L4：直接喂给 engine.tick(appraisal_bias=...)。"""
+        return self.store.appraisal_prior(
+            character_id, user_id, tau_days=tau_days, cap=cap, now=now,
+        )
+
+    def prior(self, character_id: str, user_id: str,
+              baseline: Optional[Dict[str, float]] = None,
+              tau_days: float = 30.0, cap: float = 0.2,
+              now: Optional[float] = None) -> MemoryPrior:
+        return self.store.memory_prior(
+            character_id, user_id, baseline=baseline,
+            tau_days=tau_days, cap=cap, now=now,
+        )
+
+    def refresh_summary(self, character_id: str, user_id: str,
+                        max_chars: int = 160,
+                        now: Optional[float] = None) -> str:
+        if not self.auto_summary:
+            return self.store.get_relationship(
+                character_id, user_id,
+            ).summary
+        return self.store.update_relationship_summary(
+            character_id, user_id, max_chars=max_chars, now=now,
+        )
 
     def build_context(self, character_id: str, user_id: str, query: str,
                       budget_chars: int = 1200) -> str:
@@ -1204,6 +1597,99 @@ class MemoryService:
 
     def forget(self, character_id: str, user_id: str) -> None:
         self.store.forget_user(character_id, user_id)
+
+
+# ══════════════════════════════════════════════════════
+# 旧 MemoryStoreDB 迁移
+# ══════════════════════════════════════════════════════
+
+def migrate_legacy_memories(legacy_db_path: str,
+                            store: RelationshipMemoryStore,
+                            character_id: str, user_id: str,
+                            skip_automatic: bool = True,
+                            now: Optional[float] = None) -> Dict[str, int]:
+    """把旧 engine.MemoryStoreDB 的 memories 表迁进关系域记忆。
+
+    旧库没有 character_id / user_id 维度，所以必须显式指定归属。
+    迁移是可重复执行的：raw_ref 使用 legacy:<绝对路径>:<id> 去重。
+    """
+    now = now or time.time()
+    stats = {
+        "seen": 0,
+        "migrated": 0,
+        "skipped_empty": 0,
+        "skipped_automatic": 0,
+        "skipped_duplicate": 0,
+    }
+    if not os.path.exists(legacy_db_path):
+        return stats
+
+    conn = sqlite3.connect(legacy_db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories'"
+        ).fetchone()
+        if not table:
+            return stats
+
+        rows = conn.execute(
+            """SELECT id, content, tier, arousal, relevance, emotion_snap,
+                      timestamp, access_count
+               FROM memories ORDER BY id ASC"""
+        ).fetchall()
+        legacy_ref = os.path.abspath(legacy_db_path)
+
+        for row in rows:
+            stats["seen"] += 1
+            content = (row["content"] or "").strip()
+            if not content:
+                stats["skipped_empty"] += 1
+                continue
+            if skip_automatic and content.startswith("gc="):
+                stats["skipped_automatic"] += 1
+                continue
+
+            raw_ref = f"legacy:{legacy_ref}:{row['id']}"
+            if store.has_card_raw_ref(character_id, user_id, raw_ref):
+                stats["skipped_duplicate"] += 1
+                continue
+
+            emotion_snap = _deserialize(row["emotion_snap"], {})
+            if not isinstance(emotion_snap, dict):
+                emotion_snap = {}
+            emotion_snap = {
+                str(key): float(value)
+                for key, value in emotion_snap.items()
+                if isinstance(value, (int, float))
+            }
+            salience = _salience_from_emotion(emotion_snap)
+            if not emotion_snap:
+                salience = _clamp(float(row["arousal"] or 0.0), 0.2, 1.0)
+
+            tier = row["tier"] or "short_term"
+            kind = {
+                "flash": "milestone",
+                "long_term": "episode",
+            }.get(tier, "note")
+            store.add_card(MemoryCard(
+                summary=content[:160],
+                character_id=character_id,
+                user_id=user_id,
+                kind=kind,
+                tags=["legacy", f"tier:{tier}"],
+                emotion_snap=emotion_snap,
+                salience=salience,
+                confidence=0.65 if tier != "short_term" else 0.55,
+                source="observed",
+                raw_ref=raw_ref,
+                created_at=float(row["timestamp"] or now),
+                access_count=int(row["access_count"] or 0),
+            ))
+            stats["migrated"] += 1
+    finally:
+        conn.close()
+    return stats
 
 
 # ══════════════════════════════════════════════════════

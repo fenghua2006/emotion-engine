@@ -37,14 +37,20 @@
 - 情绪驱动语音参数（speed/pitch 随引擎通道变化）
 - 桌面双击即用的 furina_bridge.py
 
-## 记忆 v0.1 ✅ — 关系域长期记忆
+## 记忆 v0.2 ✅ — L4 关系域记忆
 - 按 `(character_id, user_id)` 隔离的 SQLite 记忆
 - 卡片 / 结构化事实 / 关系状态 / 开放循环
 - CJK bigram + FTS5 检索；无 embedding 依赖
 - 预算打包（cards / facts / relationship / open loops，≤1200 字）
 - 规则抽取身份、偏好、边界、承诺
+- `appraisal_prior()` → `engine.tick(appraisal_bias=...)`，每维 ±0.2，
+  只改 `Appraisal`，不写 `Personality`
+- 关系摘要每次成功写入后自动刷新（确定性模板，≤160 字）
+- `MemoryWriteGate`：置信度 / 去重 / 冲突 / 开放循环去重 / 轮次预算
+- `scripts/migrate_legacy_memory.py`：旧 `emotion.db` 幂等迁移
 - `respond_llm()` 可选接入 `memory_context` / `relationship_memory`
-- 19 个 unittest；详细设计见 `docs/MEMORY_SYSTEM.md`
+- 19 + 27 个 unittest；100 轮 prompt ≤1200 字；有/无记忆消融通过
+- 详细设计见 `docs/MEMORY_SYSTEM.md`
 
 ## 耐受空间 v0.7 ✅ — 忍耐空间
 - `tolerance.py`：load / capacity / regulated-hyper-hypo
@@ -127,18 +133,36 @@
   `fixtures/l5_tolerance_golden*.json` 双 golden
 - `ToleranceConfig` / `ToleranceState` 新字段与序列化；快照保存
   `legacy_tolerance` 与 multi 观测键，配置不持久化
-- 38 个 L5 测试；L5.1 追加 12 个，全量 241 tests OK；L1/L2 四套 golden 无 diff
+- 38 个 L5 测试；L5.1 追加 12 个；L6 后全量 338 tests OK；L1/L2 四套 golden 无 diff
 - calm capacity current 0.862350 / legacy 0.857500；hyper / hypo / 滞回 /
   capacity 上下界 / fuzz 全部锁定
 - L5.1 ✅：仪表盘 tolerance 区间带、load/capacity、四域折线；
   hyper/hypo 本地模板、Live2D 与 `_action_tendency` 表达一致性
 - 详细设计见 `docs/TOLERANCE.md`
 
-## v0.7 — MCP 封装（进行中）
-- Claude Code / Codex 直接调引擎
-- /emotion tick / /emotion recall
-- 记忆系统接入 appraisal / 自动关系摘要
-- 仪表盘展示 StepTrace（tolerance 区间带已在 L5.1 完成）
+## P0 ✅ — 可维护性护栏
+- `tick()` 拆成有序 `_begin_tick` / `_step_*` / `_build_tick_result`；
+  调用顺序由 `test_p0_maintainability.py` 锁定
+- 表达层移到 `expression.py`（engine 继续 re-export）；LLM 网络调用移到 `llm_client.py`
+- 快照 `SNAPSHOT_VERSION` + `_migrate_snapshot_payload()`；记忆库
+  `MEMORY_SCHEMA_VERSION` + `PRAGMA user_version` + `_migrate_schema()`
+- `pyproject.toml`：ruff（E/F）+ coverage（branch，当前 gate 80%）；
+  `.github/workflows/ci.yml`：lint → unittest → coverage → 六套 golden
+- 17 个 P0 测试；全量 285 tests OK；六套 golden 无 diff
+- 分层、tick 顺序与扩展检查表见 `docs/ARCHITECTURE.md`
+
+## L6 ✅ — 表达 / JEV / Noul / MCP
+- `jev.py`：开放文本 → 六维 `Appraisal` + confidence + evidence；
+  规则优先，低置信度可选 LLM；有界 LRU 缓存、批量分块、超时与失败回退
+- `noul.py`：亲密 / 命令 / 侮辱 / 胁迫 / 威胁五类边界信号；亲密权重随 trust 变化；
+  只给建议，最终边界仍由调用方或引擎决定
+- `engine.respond_llm(..., use_jev, auto_boundary, trace)`：新增能力默认关闭，
+  旧调用逐位不变；失败写 `_jev_error` / `_boundary_error`，主链路继续
+- `mcp_server.py`：零依赖 stdio MCP，`tick` / `recall` / `state`；
+  可被 Claude Code / Codex 直接调用，记忆按 `(character_id, user_id)` 隔离
+- `scripts/replay_trace.py` + 仪表盘 `POST /api/replay`：只读副本回放 StepTrace
+- 53 个 L6 测试；全量 338 tests OK；ruff clean；六套 golden 无 diff
+- 详细契约见 `docs/JEV.md` / `docs/MCP.md`
 
 ## v0.8 — 多角色交互
 - 两个 EmotionEngine 实例间的情绪感染

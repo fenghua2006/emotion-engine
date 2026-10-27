@@ -1,0 +1,60 @@
+[project]
+name = "emotion-engine"
+version = "0.7.0.dev0"
+description = "Multi-channel emotion dynamics engine for AI characters and NPCs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "枫骅 & SCC" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "coverage>=7.6",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [".git", ".obsidian", "__pycache__", "*.db"]
+
+[tool.ruff.lint]
+# 只门禁“会坏”的规则：语法/未定义名/未使用导入/重复定义等。
+# 风格迁移（UP、E501 等）不阻塞 CI，避免一次改遍全部历史文件。
+select = ["E", "F"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 这些 import 是旧路径兼容的 re-export，不是死代码。
+"engine.py" = ["F401"]
+"dashboard/server.py" = ["E402"]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "atmosphere",
+    "core",
+    "engine",
+    "expression",
+    "jev",
+    "llm_client",
+    "mcp_server",
+    "memory",
+    "meta_emotion",
+    "noul",
+    "tolerance",
+]
+omit = [
+    "*/test_*",
+    "dashboard/*",
+    "scripts/*",
+    "characters/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+skip_empty = true
+# 当前基线约 86%（branch，含 L6 jev / noul / mcp_server）；先锁 80。
+fail_under = 80

@@ -6,7 +6,6 @@ from tolerance import (
     ZONE_HYPER,
     ZONE_HYPO,
     ZONE_REGULATED,
-    ToleranceConfig,
     ToleranceState,
 )
 

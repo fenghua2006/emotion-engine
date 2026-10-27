@@ -1,9 +1,12 @@
-# 关系域长期记忆系统 v0.1
+# 关系域长期记忆系统 v0.2（L4）
 
 > 目标：让 AI 记住「这个人、这段关系」，而不是把整段聊天记录塞进上下文。
 >
-> 代码：`memory.py` · 测试：`test_memory_system.py` · 演示：`python memory.py`  
+> 代码：`memory.py` · 测试：`test_memory_system.py` + `test_l4_memory_integration.py` · 演示：`python memory.py`
 > 相邻控制层：`tolerance.py`（耐受窗）· 设计见 [`TOLERANCE.md`](TOLERANCE.md)
+
+L4 已把记忆先验接进 `Appraisal`，并补上关系摘要自动刷新、写入闸门 v2、
+旧 `MemoryStoreDB` 迁移工具、1200 字预算压测与有/无记忆消融测试。
 
 ---
 
@@ -108,12 +111,41 @@ flowchart LR
     P[Personality / CharacterCore] -. 只读，不被记忆写回 .-> APP
 ```
 
-- 卡片保存存储时的 `emotion_snap`、`salience`、`confidence`。
-- `memory_bias()` 把这些快照压成一个有上限（默认 ±0.2）的情绪先验。
-- 先验只应作用于 `Appraisal` / `RelationshipState`，**不直接拉当前情绪状态，更不写人格**。
+- 卡片保存存储时的 `emotion_snap`、`appraisal`、`salience`、`confidence`。
+- `memory_bias()` 把情绪快照压成一个有上限（默认 ±0.2）的十通道先验。
+- `appraisal_prior()` 把卡片里的六维 `appraisal` 减去中性基线后加权平均，
+  得到同样有界（±0.2）的六维先验；这是 L4 真正进入 `engine.tick()` 的接口。
+- 先验只作用于 `Appraisal` / `RelationshipState`，**不直接拉当前情绪状态，更不写人格**。
 - 关系状态反过来影响 appraisal：高 trust 会降低威胁解释，boundary 会提高某些事件的负面权重。
 
-当前 v0.1 只实现了 `memory_bias()` 接口，尚未接入 `engine.tick()`；这是下一步。
+### L4：先验如何进入 Appraisal
+
+```text
+memory_cards.appraisal
+        │  salience × confidence × exp(−age / 30d)
+        ▼
+appraisal_prior()  → 每维 clamp 到 ±0.2
+        │
+        ▼
+core.apply_appraisal_bias(appraisal, prior)
+        │  只改六维评估，并按各维合法范围 clamp
+        ▼
+engine.tick(appraisal_bias=prior)
+        │  无 prior：完全不创建新对象，trace 键集合不变
+        ▼
+appraise() → gate → state
+```
+
+边界：
+
+- `expectedness / coping_potential` 的中性值是 `0.5`，不是 `0`；
+  记忆卡里没有存这两维时按中性处理，不伪造“更可控/更意外”。
+- 只有带 `appraisal` 的卡片参与六维先验；只有情绪快照的旧卡片不影响
+  `appraisal_prior()`，但仍参与 `memory_bias()` 的通道先验。
+- `engine.tick(..., appraisal_bias=...)` 在没有 `Appraisal` 时不会拉状态。
+  文本 → `Appraisal` 由 L6 的 `jev.py` 提供（默认关闭）；L4 只保证先验接口已就位。
+- trace 新增 `memory_bias_enabled / memory_bias_applied /
+  appraisal_before_memory` 三个键，且只在显式传入先验时出现。
 
 ---
 
@@ -262,10 +294,74 @@ reply = respond_llm(
 
 `respond_llm` 的行为：
 
-1. 先跑 `respond()`，得到当前情绪状态。
-2. 传入 `relationship_memory` 时，按 `character_id × user_id` 构建记忆区块。
-3. 记忆区块注入 prompt；没有 LLM key 时仍回退本地模板。
-4. 回复后调用 `remember_turn()`，只写高置信事实/边界/承诺。
+1. 传入 `relationship_memory` 时，先取有界 `appraisal_prior`。
+2. 用 `appraisal`（如果有）调用 `respond()`；先验只经六维评估进入引擎。
+3. 按 `character_id × user_id` 构建记忆区块并注入 prompt。
+4. 没有 LLM key 时仍回退本地模板。
+5. 回复后调用 `remember_turn()`，只写通过闸门的候选。
+
+### 6.1 写入闸门 v2
+
+`MemoryWriteGate` 在写库前做确定性判断：
+
+```text
+explicit / note                 → 直接接受
+identity / boundary             → 置信度 ≥ 0.5 接受
+confidence < 0.55               → 丢弃
+同一 fact key、同值             → confirm（不重复建行）
+同一 fact key、不同值           → supersede 旧值
+promise 与已有 open_loop 高相似 → 丢弃
+近 7 天卡片摘要 Jaccard ≥ 0.8   → 丢弃
+其他                            → 作为新卡片写入
+```
+
+`MemoryService` 默认每轮最多写 4 条；`last_gate_decisions` 保留本轮每个候选
+的 `reason / action`，方便调试，不进入 prompt。
+
+### 6.2 关系摘要自动刷新
+
+`compose_relationship_summary()` 只使用结构化事实、边界、开放循环和
+高显著卡片，生成确定性的一句话摘要：
+
+```text
+名字：小枫；偏好：不喜欢被说教；未闭环：周五把方案发给你
+```
+
+- 默认上限 160 字；`MemoryService(auto_summary=True)` 在每次成功写入后刷新。
+- 数据没有变化时不写库；没有可摘要内容时保留原摘要。
+- `update_relationship(summary=...)` 仍可手写；下一次有新数据时会重新生成。
+- 不调用 LLM，不上传原文。
+
+### 6.3 旧 `MemoryStoreDB` 迁移
+
+旧库在 `emotion.db` 的 `memories` 表，没有用户维度，因此迁移必须显式指定
+`character_id` / `user_id`：
+
+```bash
+python scripts/migrate_legacy_memory.py \
+    --legacy-db emotion.db \
+    --memory-db memory.db \
+    --character-id furina \
+    --user-id alice
+```
+
+- 默认跳过自动生成的 `gc=...` 行；`--include-automatic` 可一并迁移。
+- 迁移后写 `raw_ref = legacy:<绝对路径>:<id>`，重复执行只增加
+  `skipped_duplicate`。
+- 旧库不会被删除；确认新库可读后再手动退役。
+
+### 6.4 schema 版本与迁移点
+
+`memory.py` 用 SQLite `PRAGMA user_version` 记录表结构版本：
+
+- `MEMORY_SCHEMA_VERSION` 当前为 `1`。
+- `0` = L4 之前的旧库；打开时由 `CREATE TABLE IF NOT EXISTS` 补齐基线，
+  然后写入 `1`。
+- 版本高于代码支持的库会抛 `RuntimeError`，避免旧代码破坏新数据。
+- 未来改表结构时：递增 `MEMORY_SCHEMA_VERSION`，并在
+  `RelationshipMemoryStore._migrate_schema(from_version)` 里加
+  `if from_version < N` 分支；同时补 `test_p0_maintainability.py` 的
+  旧库 / 未来库测试。
 
 ---
 
@@ -288,20 +384,23 @@ reply = respond_llm(
 
 1. **规则抽取高精度、低召回**：能稳定抓身份/偏好/边界/承诺，但开放式事件需要 `remember_event()` 或后续 LLM extractor。
 2. **没有 embedding**：同义改写可能漏召回；先用 lexical + recency + salience 控成本，后续可加本地向量。
-3. **关系摘要尚未自动更新**：目前由 `update_relationship()` 显式写入；下一步做离线 summarizer。
-4. **`memory_bias()` 尚未接入 tick**：接口已就绪，但还没有进入 appraisal。
-5. **写入是同步的**：生产环境应挪到后台队列，避免阻塞回复。
-6. **新旧记忆库并存**：旧的 `engine.MemoryStoreDB` 仍在 `emotion.db`；新系统默认写 `memory.db`。迁移策略待定。
+3. **关系摘要是规则模板**：只压缩结构化信息，不生成自然叙事；复杂关系仍需 LLM summarizer。
+4. **先验依赖 appraisal 快照**：旧卡片只有 `emotion_snap` 时，`appraisal_prior()` 返回零；通道先验仍可用。
+5. **JEV 是规则 v0**：L6 的 `jev.py` 已能把文本转成 `Appraisal`（含低置信度回退），但反讽、长距离指代和复杂否定仍可能漏判；六维先验只在调用方显式传 `appraisal` 或开启 `use_jev` 时生效。
+6. **写入是同步的**：生产环境应挪到后台队列，避免阻塞回复。
+7. **新旧记忆库并存**：迁移工具已提供，但旧 `MemoryStoreDB` 仍保留；需要手动确认后退役。
+8. **闸门是规则版**：没有学习式 novelty / future utility 判断，阈值是手工初值。
 
 ---
 
 ## 9. 下一步
 
+- [x] 把 `memory_bias()` / `appraisal_prior()` 接入 `Appraisal`，并做上限与消融实验。
+- [x] 关系摘要自动更新（确定性模板，每次成功写入后刷新）。
+- [x] 记忆写入闸门 v2：去重、冲突、时效、置信度、显式请求。
+- [x] 旧 `MemoryStoreDB` 迁移工具。
 - [ ] v0.1.1：可选 LLM extractor（DeepSeek JSON），带 confidence 和 fallback。
-- [ ] 关系摘要离线生成：每 N 轮 / 每次会话结束更新 `relationships.summary`。
-- [ ] 把 `memory_bias()` 接入 `Appraisal`，并做上限与消融实验。
-- [ ] 记忆写入闸门 v2：novelty、future utility、relationship impact、explicit request。
-- [ ] 旧 `MemoryStoreDB` 迁移 / 退役。
+- [ ] 关系摘要升级为离线 LLM 叙事（每 N 轮 / 会话结束）。
 - [ ] 调试面板：查看某用户的关系摘要、事实、卡片、开放循环。
 
 ---
@@ -311,6 +410,7 @@ reply = respond_llm(
 ```bash
 python memory.py
 python -m unittest test_memory_system.py -v
+python -m unittest test_l4_memory_integration.py -v
 ```
 
 当前覆盖：
@@ -319,9 +419,19 @@ python -m unittest test_memory_system.py -v
 - 事实 supersede / 重复确认
 - 查询相关性 / 高显著性兜底
 - 开放循环生命周期
-- prompt 预算
-- 关系状态更新
+- prompt 预算 / 100 轮 ≤ 1200 字
+- 关系状态更新 / 摘要自动刷新
 - 忘记用户
 - 规则抽取
 - 记忆偏置有界性
+- L4 六维先验 / 引擎接入 / trace 可观测性 / 消融
+- 写入闸门去重、冲突、置信度、轮次预算
+- 旧库迁移幂等性
 - SQLite 重开持久化
+
+当前测试数：
+
+- `test_memory_system.py`：19
+- `test_l4_memory_integration.py`：27
+- L6 记忆相关：`test_l6_mcp.py` 的 `recall` / `state` 工具测试
+- 全套：338 tests OK

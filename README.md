@@ -42,7 +42,7 @@ Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时�
 
 `tolerance.py` 不新增情绪通道，而是在每次 tick 后读取状态，决定下一 tick 是调节态、过度唤醒还是低唤醒。L5 默认把容量拆成愤怒 / 恐惧 / 亲密 / 批评四域，再取加权有效容量。
 
-底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。
+底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；两者默认关闭，不改变默认曲线。
 
 ## 快速开始
 
@@ -117,8 +117,9 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L5.1 后全量 241 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L6 后全量 338 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
+- P0 可维护性：`tick()` 拆成有序 `_step_*`、表达层 / LLM 客户端分层、ruff + coverage + CI、快照 / 记忆 schema 版本与迁移点；见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 - L0–L6 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
 
@@ -129,7 +130,8 @@ trace = result["trace"]
 - 46 条冻结事件：角色 31 + engine demo 3 + 合成边界 12。
 - 双 golden：`fixtures/l1_golden.json`（当前）+ `l1_golden_legacy.json`（v0.7 对照），误差 < `1e-9`。
 - 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 166 tests，
-  L3.5 完成后 191 tests，L5 校准核心完成后 229 tests，L5.1 表达/仪表盘后 **241 tests, OK**。
+  L3.5 完成后 191 tests，L5 校准核心完成后 229 tests，L5.1 表达/仪表盘后 241 tests，
+  L4 记忆接入后 285 tests，L6 JEV / Noul / MCP 后 **338 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -212,11 +214,11 @@ print(result["trace"]["meta_emotions"])
   `tolerance_load_bias` 作为有界附加负荷（≤0.2）进入 tolerance；默认关闭。
 - 同一 anger 的两种二阶态度：
   `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
-- 25 个 L3.5 测试；L5.1 后全量 **241 tests, OK**。
+- 25 个 L3.5 测试；L6 后全量 **338 tests, OK**。
 - 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
-## 关系域长期记忆 v0.1
+## 关系域长期记忆 v0.2（L4）
 
 `memory.py` 提供按 `(character_id, user_id)` 隔离的长期记忆，不存全量聊天，只存压缩后的卡片、事实、关系摘要和开放循环。
 
@@ -236,9 +238,13 @@ memory.remember_turn(
 ```
 
 - 记忆影响 appraisal / relationship / 语气，但**不写 Personality**。
+- L4：`appraisal_prior()` 把卡片六维评估压成 ±0.2 先验；
+  `engine.tick(appraisal_bias=...)` 只叠加到 `Appraisal`，无 `Appraisal` 时不拉状态。
+- 关系摘要每次成功写入后自动刷新；`MemoryWriteGate` 做去重、冲突、置信度与轮次预算。
+- 旧 `emotion.db` 记忆可用 `scripts/migrate_legacy_memory.py` 幂等迁移。
 - SQLite FTS5 + CJK bigram；无 embedding，无外部依赖。
 - 完整设计、信息流图与 GitHub 调研：[`docs/MEMORY_SYSTEM.md`](docs/MEMORY_SYSTEM.md)。
-- 测试：`python -m unittest test_memory_system.py -v`。
+- 测试：`python -m unittest test_memory_system.py test_l4_memory_integration.py -v`。
 
 ## 忍耐空间 v0.7 + L5 耐受校准
 
@@ -275,8 +281,38 @@ print(result["tolerance"])
 - L5.1 表达一致性：hyper 使用防御型本地台词与紧张 Live2D 表情；hypo 使用
   关机型台词与低唤醒表情，`_action_tendency` 同时压低趋近与回避。
 - 测试：`python -m unittest test_tolerance.py test_engine_tolerance.py test_l5_tolerance.py test_l5_1_expression_dashboard.py -v`。
+- P0 护栏测试：`python -m unittest test_p0_maintainability.py -v`；lint / 覆盖率见 `docs/ARCHITECTURE.md`。
 - L5 golden：`python scripts/generate_l5_tolerance_golden.py --check`（legacy 加 `--legacy`）。
 - 完整公式、域系数、伤疤映射与限制：[`docs/TOLERANCE.md`](docs/TOLERANCE.md)。
+
+## L6 表达 / JEV / Noul / MCP（v0）
+
+L6 把“开放文本”接到已有的六维 `Appraisal`，并给外部 Agent 一个可直接调用的 MCP 外壳。
+所有入口默认关闭，旧调用行为不变。
+
+```python
+from engine import respond_llm
+
+result = respond_llm(
+    engine, "没想到你居然离开了",
+    use_jev=True,        # 规则优先；需要时再叠加 LLM
+    auto_boundary=True,  # Noul 文本边界信号
+    trace=True,
+)
+print(result["_jev"])      # appraisal / confidence / evidence / source
+print(result["_boundary"]) # violated / confidence / categories
+```
+
+- `jev.py`：文本 → 六维 `Appraisal` + confidence + evidence。规则优先，低置信度时可选用 LLM；
+  有界 LRU 缓存、批量分块、超时与失败回退。JEV 不写状态、人格或记忆，失败时主链路继续。
+- `noul.py`：文本边界信号（亲密 / 命令 / 侮辱 / 胁迫 / 威胁）；亲密权重随 `trust` 变化。
+  自动检测只是建议，调用方仍可用 `boundary_violation` 显式覆盖。
+- `mcp_server.py`：零依赖 stdio MCP，暴露 `tick` / `recall` / `state`，可直接被
+  Claude Code / Codex 调用；记忆仍按 `(character_id, user_id)` 隔离。
+- trace 回放：`scripts/replay_trace.py` 与仪表盘 `POST /api/replay` 都使用只读副本，
+  不改真实引擎 / 快照 / 记忆。
+- 测试：`python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v`。
+- 详细契约：[`docs/JEV.md`](docs/JEV.md)、[`docs/MCP.md`](docs/MCP.md)。
 
 ## 10 通道
 

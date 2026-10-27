@@ -12,12 +12,12 @@
   两个角色在 trust baseline、joy baseline、社交应对上完全相反
 """
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
-    EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    MemoryStore, SensitizationStore, FAST_CHANNELS
+    EmotionEngine, EmotionalState, Personality, Appraisal, MemoryStore, SensitizationStore
 )
 
 columbina_name = "哥伦比娅"
@@ -153,7 +153,6 @@ def create_columbina():
 # ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import time
 
     c = create_columbina()
 
@@ -213,7 +212,7 @@ if __name__ == "__main__":
     wake_result = c.wake()
     print(f"  offline: {wake_result['offline_minutes']:.0f}min")
     print(f"  longing after 2 days: {c.state.longing:.3f}")
-    print(f"  [Kokomi after 1 day: longing=0.059 — Columbina attachment builds differently]")
+    print("  [Kokomi after 1 day: longing=0.059 — Columbina attachment builds differently]")
 
     # 对比总结
     print("\n=== Key Differences vs Kokomi ===")

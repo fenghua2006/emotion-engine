@@ -289,6 +289,12 @@ tolerance.update(
 - 快照时间（作为恢复后的计时起点）
 - 旧伤疤
 
+payload 带 `schema_version`（`engine.SNAPSHOT_VERSION`，当前 `2`）。旧版
+“只存通道字典”或没有版本号的 payload 由 `_migrate_snapshot_payload()` 统一
+迁移到当前版本；来自更新版本的快照会拒绝加载，避免旧代码截断新字段。
+新增持久化字段时：递增 `SNAPSHOT_VERSION`、在迁移函数里补分支、并补
+`test_p0_maintainability.py` 的版本测试。
+
 `ToleranceConfig` 是代码级配置，**不写入快照**；要精确续跑自定义参数，
 加载时需给目标引擎重新提供同一个 `tolerance_config`。旧快照没有新键时
 按默认 multi 迁移，旧六字段值保持不变；`legacy_tolerance=True` 的快照会
@@ -413,7 +419,7 @@ python scripts/generate_l5_tolerance_golden.py --legacy --check
 验收结果：
 
 ```text
-L5 38 tests + L5.1 12 tests, OK；全套 241 tests, OK
+L5 38 tests + L5.1 12 tests, OK；L4 后全套 285 tests, OK
 golden: 15 scenarios / 41 steps（current + legacy）
 calm current: capacity 0.862350
   domains anger 0.832 / fear 0.878 / intimacy 0.865 / criticism 0.8735

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-多通道情绪交互引擎 — a 10-channel emotion engine for AI companions. Replaces the 1974 PAD (Pleasure-Arousal-Dominance) model with independent emotion channels that modulate each other without canceling. MIT license. Pure dynamics live in `core.py`; `engine.py` is the composition root (~1,650 lines) plus `atmosphere.py`, `meta_emotion.py`, `tolerance.py`, and `memory.py` modules.
+多通道情绪交互引擎 — a 10-channel emotion engine for AI companions. Replaces the 1974 PAD (Pleasure-Arousal-Dominance) model with independent emotion channels that modulate each other without canceling. MIT license. Pure dynamics live in `core.py`; `engine.py` is the composition root (~1,725 lines) plus `atmosphere.py`, `meta_emotion.py`, `tolerance.py`, `memory.py`, `expression.py`, `llm_client.py`, `jev.py`, and `noul.py` modules.
 
 Owner: 枫骅 (fenghua2006). GitHub: `github.com/fenghua2006/emotion-engine`.
 
@@ -35,15 +35,21 @@ uv run python test_iloveyou.py
 
 # Tests (stdlib unittest; no pytest dependency)
 python -m unittest test_core_line.py test_tolerance.py test_engine_tolerance.py -v
-python -m unittest test_memory_system.py -v
+python -m unittest test_memory_system.py test_l4_memory_integration.py -v
 python -m unittest test_l1_fast_channels.py test_interaction_activation.py -v
 python -m unittest test_l2_slow_channels.py -v
 python -m unittest test_l3_atmosphere_scars.py -v
 python -m unittest test_l3_5_meta_emotion.py -v
 python -m unittest test_l5_tolerance.py test_l5_1_expression_dashboard.py -v
+python -m unittest test_p0_maintainability.py -v
+python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v
 
-# Full suite (241 tests)
+# Full suite (338 tests)
 python -m unittest discover
+
+# L6 JEV / MCP
+uv run python mcp_server.py --db memory.db
+uv run python scripts/replay_trace.py --text "没想到你居然离开了" --character furina
 
 # L1 golden generation / verification
 python scripts/generate_l1_golden.py                    # current behavior
@@ -80,7 +86,7 @@ uv run python C:\Users\Administrator\Desktop\furina_fresh.py    # Baseline + sce
 
 ## Architecture
 
-Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,650 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
+Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,725 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Presentation: `expression.py` + `llm_client.py`. Text entry: `jev.py` + `noul.py`. MCP wrapper: `mcp_server.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
 
 ### L0 boundary
 
@@ -130,7 +136,20 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
 - Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38 tests, L5.1 adds 12, and the full suite is 241. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, and the full suite is 338. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+
+### Relationship memory (L4 v0.2)
+
+`memory.py` stores relationship-scoped cards/facts/open loops. L4 adds a bounded prior into `Appraisal`; it never pulls `EmotionalState` directly and never writes `Personality`.
+
+- `RelationshipMemoryStore.appraisal_prior()` averages card `appraisal` snapshots against neutral baselines (`expectedness` / `coping_potential` = 0.5), weighted by salience × confidence × exp(−age/30d), and clamps each dimension to ±0.2 (`cap`).
+- `core.apply_appraisal_bias()` applies the prior to a **copy** of `Appraisal`, caps each delta, then clamps to the field's legal range. `EmotionEngine.tick(appraisal_bias=...)` calls it before `appraise()`.
+- No `Appraisal` → no state effect. Trace keys are unchanged by default; an active prior adds exactly `memory_bias_enabled`, `memory_bias_applied`, `appraisal_before_memory`.
+- `respond()` / `respond_llm()` accept an optional `appraisal`; `respond_llm` auto-recalls `appraisal_prior` from `relationship_memory`.
+- `MemoryWriteGate` rejects low-confidence candidates, duplicates cards/open loops (Jaccard ≥ 0.8 over 7 days), allows fact-key supersession, and caps 4 writes per turn. `MemoryService.last_gate_decisions` exposes reasons.
+- `update_relationship_summary()` regenerates a deterministic ≤160-char summary after successful writes; manual summaries survive until new data arrives.
+- `scripts/migrate_legacy_memory.py` migrates `emotion.db` rows idempotently via `raw_ref = legacy:<path>:<id>`; old DB is not deleted.
+- 27 tests in `test_l4_memory_integration.py`; 100 turns stay ≤1200 prompt chars; with/without-prior ablation leaves `Personality` unchanged. Details: `docs/MEMORY_SYSTEM.md`.
 
 ### Tolerance calibration (L5 v0)
 
@@ -149,6 +168,19 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `_action_tendency()` hypo now reduces both approach (`×0.60`) and avoidance (`×0.55`) with a wider `1.35` dominance margin; hyper keeps `×0.85 / ×1.25`. Overloaded `respond()` also sets `needs_llm=True`.
 - Dashboard tolerance card: zone background bands, load/capacity lines, four domain capacity lines, current zone/readouts, togglable legend. `/api/state` history points now store the full tolerance dict; `tolerance_history_point()` is the pure helper.
 - Tests: `test_l5_1_expression_dashboard.py` (12 tests). Details: `docs/TOLERANCE.md` §7.
+
+### P0 maintainability
+
+`EmotionEngine.tick()` is an orchestrator over ordered `_step_*` methods (`_begin_tick`, decay, slow channels, appraisal, after-appraisal, interactions, shock, memory/saga, meta/tolerance, result). Expression helpers live in `expression.py` (re-exported by `engine.py`); network calls live in `llm_client.py`. Snapshot payloads use `engine.SNAPSHOT_VERSION` + `_migrate_snapshot_payload()`; memory SQLite uses `memory.MEMORY_SCHEMA_VERSION` + `PRAGMA user_version`. Guardrails: `pyproject.toml` (ruff/coverage), `.github/workflows/ci.yml`, `test_p0_maintainability.py`. Details: `docs/ARCHITECTURE.md`.
+
+### L6 JEV / MCP
+
+- `jev.py` is a rule-first text → six-dim `Appraisal` evaluator with bounded LRU cache, batch chunks, optional LLM supplement, and a neutral fallback. It never writes state / personality / memory. `JEVResult` carries `appraisal`, `confidence`, `evidence`, `source`, `cached`.
+- LLM is opt-in (`use_llm=True`) and only fires below `confidence_threshold` unless `force_llm=True`; failures keep the rule result. LLM output is validated and clamped via `make_appraisal()`.
+- `noul.py` detects text boundary signals (intimacy / command / insult / coercion / threat). Intimacy weight depends on `trust`; the engine still owns the final boundary decision.
+- `respond(..., boundary_violation=False, trace=False)` and `respond_llm(..., use_jev=False, jev=None, auto_boundary=False, boundary_violation=None, trace=False)`. All defaults preserve old behavior; results expose `_jev` / `_boundary` and `_jev_error` / `_boundary_error`.
+- `mcp_server.py` is a zero-dependency MCP stdio server exposing `tick`, `recall`, `state`; memory is lazy and isolated by `(character_id, user_id)`. `scripts/replay_trace.py` and dashboard `POST /api/replay` provide read-only trace replay.
+- 53 tests across `test_l6_jev.py` (22), `test_l6_integration.py` (15), `test_l6_mcp.py` (16). Details: `docs/JEV.md`, `docs/MCP.md`.
 
 ### Core data flow
 
@@ -207,7 +239,7 @@ applies boundary/interactions, and detects shock — pre-L3 behavior for exact A
 Two systems coexist:
 
 - `MemoryStoreDB` (legacy, `engine.py`): SQLite, Arousal-driven storage (Diamond 2007), 30-min consolidation window, tier flash/long_term/short_term. `saga_pull()` runs every 24h.
-- `memory.py` (v0.1): relationship-scoped (`character_id × user_id`) compressed cards, facts, relationship summary, open loops; FTS5 + CJK bigram recall; prompt budget ≤1200 chars. Memory never writes `Personality`.
+- `memory.py` (v0.2 / L4): relationship-scoped (`character_id × user_id`) compressed cards, facts, relationship summary, open loops; FTS5 + CJK bigram recall; prompt budget ≤1200 chars. Bounded `appraisal_prior()` enters `engine.tick()` only through six-dimensional `Appraisal`; automatic summary; write gate v2; legacy migration. Memory never writes `Personality`.
 
 ### Tolerance window
 

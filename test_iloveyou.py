@@ -1,5 +1,6 @@
 """Test: dual-mode respond() — local (0 token) and LLM-enhanced."""
-import sys, os
+import sys
+
 sys.path.insert(0, '.')
 
 from engine import Appraisal, respond, _build_llm_prompt
@@ -32,10 +33,10 @@ prompt = _build_llm_prompt(
     []
 )
 print(f"  Token estimate: ~{len(prompt)//4} tokens")
-print(f"  Prompt preview:")
+print("  Prompt preview:")
 for line in prompt.split("\n")[:8]:
     print(f"    {line}")
-print(f"    ...")
+print("    ...")
 
 # Mode 1 repeated — trust builds, LLM no longer needed
 for _ in range(3):

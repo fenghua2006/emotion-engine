@@ -399,7 +399,7 @@ L5 后续接入（`docs/TOLERANCE.md`）：`EmotionEngine` 新增
 ### 验收结果
 
 - ✅ `python -m unittest test_l3_5_meta_emotion.py -v`：**25 tests OK**（L3.5 基线）。
-- ✅ L5.1 后全套：**241 tests OK**；L5 单独 **38 tests OK**，L5.1 **12 tests OK**。
+- ✅ L4 后全套：**285 tests OK**；L5 单独 **38 tests OK**，L5.1 **12 tests OK**，L4 **27 tests OK**。
 - ✅ `tolerance_meta_load_enabled=False` 时 L3.5 trace 键集合、调用次数与
   post-update 计算路径不变。
 - ✅ 开启后 meta 只计算一次（trace on/off 一致），并使用上一 tick zone / overload。

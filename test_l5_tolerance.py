@@ -11,7 +11,7 @@ import random
 import sqlite3
 import tempfile
 import unittest
-from dataclasses import asdict, fields, replace
+from dataclasses import fields, replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -35,7 +35,6 @@ from tolerance import (
     DOMAIN_WEIGHTS,
     META_LOAD_HARD_CAP,
     SCAR_DOMAIN_MAP,
-    VALID_CAPACITY_MODELS,
     VALID_ZONES,
     ZONE_HYPER,
     ZONE_HYPO,

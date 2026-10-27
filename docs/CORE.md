@@ -148,8 +148,10 @@ python -m unittest test_core_line.py test_tolerance.py \
   test_l1_fast_channels.py test_interaction_activation.py \
   test_l2_slow_channels.py test_l3_atmosphere_scars.py \
   test_l3_5_meta_emotion.py test_l5_tolerance.py -v
-# 241 tests, OK（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1 测试）
+# 上述回归 285 tests, OK；全量 338 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6 测试）
 ```
+
+L6 的 `jev.py` / `noul.py` 只在显式开启时生成输入；默认路径不改变本文件任何公式或 golden。
 
 另外验证了：
 

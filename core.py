@@ -498,6 +498,48 @@ class Appraisal:
     other_agency:       float = 0.0   # 0~1 他人/外部因素占比
     social_evaluation:  float = 0.0   # -1 负面评价 ~ +1 正面评价
 
+    def to_dict(self) -> Dict[str, float]:
+        return {
+            "goal_relevance": self.goal_relevance,
+            "goal_conduciveness": self.goal_conduciveness,
+            "expectedness": self.expectedness,
+            "coping_potential": self.coping_potential,
+            "other_agency": self.other_agency,
+            "social_evaluation": self.social_evaluation,
+        }
+
+
+APPRAISAL_LIMITS: Dict[str, Tuple[float, float]] = {
+    "goal_relevance":     (0.0, 1.0),
+    "goal_conduciveness": (-1.0, 1.0),
+    "expectedness":       (0.0, 1.0),
+    "coping_potential":   (0.0, 1.0),
+    "other_agency":       (0.0, 1.0),
+    "social_evaluation":  (-1.0, 1.0),
+}
+
+
+def apply_appraisal_bias(appraisal: Appraisal,
+                         bias: Optional[Dict[str, float]],
+                         cap: float = 0.2) -> Appraisal:
+    """把有界记忆先验叠加到六维 Appraisal 上，返回新对象。
+
+    L4 的边界：
+      - 只改 Appraisal，不直接改 EmotionalState / Personality；
+      - 每个维度先按 cap 截断，再按该维度的合法范围 clamp；
+      - cap 默认 0.2，与 memory.memory_bias() 的上限一致。
+    """
+    if not bias:
+        return appraisal
+    cap = max(0.0, float(cap))
+    values: Dict[str, float] = {}
+    for name, (lo, hi) in APPRAISAL_LIMITS.items():
+        current = float(getattr(appraisal, name, 0.0))
+        delta = float(bias.get(name, 0.0))
+        delta = max(-cap, min(cap, delta))
+        values[name] = max(lo, min(hi, current + delta))
+    return Appraisal(**values)
+
 
 # L2: 自责低于 30% 不足以产生愧疚。低于门槛不是“弱愧疚”，而是“不是我的错”。
 # 超过门槛后按剩余责任比例平滑放大，避免在 0.3 处出现跳变。
@@ -651,6 +693,11 @@ class StepTrace:
     scar_shift: float = 0.0
     scar_channels: List[str] = field(default_factory=list)
     gated_written: Dict[str, float] = field(default_factory=dict)
+    # L4 记忆先验可观测性。只在显式传入 appraisal_bias 时序列化，
+    # 默认 trace 键集合保持不变。
+    memory_bias_enabled: bool = False
+    memory_bias_applied: Dict[str, float] = field(default_factory=dict)
+    appraisal_before_memory: Dict[str, float] = field(default_factory=dict)
     # L3.5 元情绪可观测性。只在 meta 开启且 trace=True 时序列化；
     # 这些字段只读，不参与核心计算。
     meta_enabled: bool = False
@@ -714,6 +761,17 @@ class StepTrace:
             "gated_written": dict(self.gated_written),
             "notes": list(self.notes),
         }
+        if self.memory_bias_enabled:
+            data.update({
+                "memory_bias_enabled": True,
+                "memory_bias_applied": {
+                    key: round(value, 4)
+                    for key, value in self.memory_bias_applied.items()
+                },
+                "appraisal_before_memory": dict(
+                    self.appraisal_before_memory
+                ),
+            })
         if self.meta_enabled:
             bias = self.regulation_bias or {}
             data.update({

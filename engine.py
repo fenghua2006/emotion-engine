@@ -1,5 +1,5 @@
 """
-Emotion Engine v0.7-dev — 多通道情绪交互引擎（L0 核心·L2 慢通道·记忆·耐受窗）
+Emotion Engine v0.7-dev — 多通道情绪交互引擎（L0 核心·L2 慢通道·记忆·耐受窗·JEV/MCP）
 ==================================================================
 论文验证的设计决策:
   - Jennings (2025): 情绪 = 多个并行匹配流同时激活
@@ -50,6 +50,20 @@ L3 氛围与伤疤（2026/10/26）:
   - legacy_atmosphere=True 保留 pre-L3 的顺序、零密度、无 clamp 与旧 notes
   - 详细记录见 docs/L3_ATMOSPHERE_SCARS.md
 
+L4 关系域记忆（2026/10/26）:
+  - 六维 appraisal prior 通过 tick(appraisal_bias=...) 进入评估，每维 ±0.2
+  - 仅在调用方显式传入 Appraisal 时生效；记忆永不写 Personality / CharacterCore
+  - 十通道 memory_bias()、关系摘要自动刷新、写入闸门 v2、旧库幂等迁移
+  - 默认 trace 键集合不变；传入先验时追加 memory_bias_* 观测字段
+  - 详细记录见 docs/MEMORY_SYSTEM.md
+
+L6 表达 / JEV / Noul / MCP（2026/10/27）:
+  - respond_llm(use_jev=...)：文本经 jev.py 生成 Appraisal，再走原 tick()
+  - auto_boundary：noul.py 只提供边界建议，显式 boundary_violation 优先
+  - 新参数全部默认关闭；失败写 _jev_error / _boundary_error，主链路继续
+  - MCP 外壳与 trace 回放在 mcp_server.py / scripts/replay_trace.py，不改动力学
+  - 详细记录见 docs/JEV.md、docs/MCP.md
+
 v0.3 核心变更:
   - 记忆-情绪耦合: Arousal 驱动存储 + 30min 固化窗口 + 三级记忆
   - Saga 效应: 长期记忆持续微拉基线（每 24h tick 调用一次）
@@ -92,23 +106,25 @@ from atmosphere import (
 
 
 from core import (
-    ABSENCE_CHANNELS,
+    ABSENCE_CHANNELS,  # noqa: F401 — 兼容旧 import
+    APPRAISAL_LIMITS,
     Appraisal,
     Channel,
     EmotionalState,
     FAST_CHANNELS,
     GUILT_SELF_AGENCY_THRESHOLD,
     HALF_LIFE,
-    INTERACTION_RULES,
+    INTERACTION_RULES,  # noqa: F401 — 兼容旧 import
     NEGATIVE_CHANNELS,
-    NEGATIVE_CHANNEL_NAMES,
+    NEGATIVE_CHANNEL_NAMES,  # noqa: F401 — 兼容旧 import
     OFFLINE_COMPRESSION,
     OFFLINE_TRUST_DECAY_DAYS,
     OFFLINE_TRUST_DECAY_RATE,
     Personality,
     SHOCK_WEIGHT,
-    SLOW_CHANNELS,
+    SLOW_CHANNELS,  # noqa: F401 — 兼容旧 import
     StepTrace,
+    apply_appraisal_bias,
     apply_interactions,
     appraise,
     damage_trust,
@@ -125,6 +141,51 @@ from meta_emotion import (
     MetaEmotionProfile,
     evaluate_meta_emotion,
 )
+
+from expression import (
+    _CHARACTER_POOLS,  # noqa: F401 — 兼容旧 import
+    _ZONE_POOLS,  # noqa: F401 — 兼容旧 import
+    _action_tendency,
+    _build_llm_prompt,
+    _dominant_channel,
+    _emotion_snapshot,
+    _expression_params,
+    _mood_hint,  # noqa: F401 — 兼容旧 import
+    _select_local_utterance,
+)
+from llm_client import call_llm
+
+
+@dataclass
+class _TickContext:
+    """一次 tick 的中间状态；只用于组合根拆分，不对外暴露。"""
+
+    now: float
+    raw_elapsed_minutes: float
+    elapsed_minutes: float
+    elapsed_hours: float
+    appraisal: Optional[Appraisal]
+    boundary_violation: bool
+    appraisal_bias: Optional[Dict[str, float]]
+    trace_data: Optional[StepTrace]
+    baseline: Dict[Channel, float]
+    atmosphere_before: float
+    positive_input: int = 0
+    raw: Dict[Channel, float] = field(default_factory=dict)
+    gated: Dict[Channel, float] = field(default_factory=dict)
+    shock_channels: List[str] = field(default_factory=list)
+    gated_written: Dict[Channel, float] = field(default_factory=dict)
+    scar_shift: float = 0.0
+    scar_channels: List[str] = field(default_factory=list)
+    atmosphere_applied: float = 0.0
+    atmosphere_multipliers: Dict[str, float] = field(default_factory=dict)
+    shock_density: float = 0.0
+    atmosphere_arousal: float = 0.0
+    appraisal_before_memory: Dict[str, float] = field(default_factory=dict)
+    memory_bias_applied: Dict[str, float] = field(default_factory=dict)
+    blends: List[str] = field(default_factory=list)
+    meta_state: Optional[Any] = None
+    meta_load_bias: float = 0.0
 
 
 @dataclass
@@ -280,18 +341,48 @@ class EmotionEngine:
     def tick(self, appraisal: Optional[Appraisal] = None,
              boundary_violation: bool = False,
              now: Optional[float] = None,
-             trace: bool = False) -> Dict:
+             trace: bool = False,
+             appraisal_bias: Optional[Dict[str, float]] = None) -> Dict:
         """
         每次对话轮次/事件 的完整情绪更新。
         boundary_violation: 低信任时的越界称呼（亲密词等）
         now: 可注入的时钟，便于确定性测试；默认使用当前时间。
         trace: 为 True 时额外返回 StepTrace（分阶段快照，不改变计算）。
+        appraisal_bias: L4 记忆先验；只叠加到六维 Appraisal，默认 None
+            时计算路径与键集合完全不变。
+
+        实现被拆成带顺序的 _step_*；顺序即契约，改变顺序必须重跑
+        L1/L2/L5 六套 golden 与 L3 A/B 测试。
         """
+        ctx = self._begin_tick(
+            appraisal=appraisal,
+            boundary_violation=boundary_violation,
+            now=now,
+            trace=trace,
+            appraisal_bias=appraisal_bias,
+        )
+        self._step_decay(ctx)
+        self._step_slow_channels(ctx)
+        self._step_appraisal(ctx)
+        self._step_after_appraisal(ctx)
+        self._step_interactions(ctx)
+        self._step_shock(ctx)
+        self._step_memory_and_saga(ctx)
+        self._step_meta_and_tolerance(ctx)
+        return self._build_tick_result(ctx)
+
+    # ── tick 各阶段：顺序即契约 ──
+
+    def _begin_tick(self, *,
+                    appraisal: Optional[Appraisal],
+                    boundary_violation: bool,
+                    now: Optional[float],
+                    trace: bool,
+                    appraisal_bias: Optional[Dict[str, float]]) -> _TickContext:
         now = time.time() if now is None else now
-        # 注入时钟可能早于上次更新（测试/时钟回拨）；不允许负时间。
         raw_elapsed_minutes = (now - self.state._last_update) / 60.0
         elapsed_minutes = max(0.0, raw_elapsed_minutes)
-        elapsed_hours   = elapsed_minutes / 60.0
+        elapsed_hours = elapsed_minutes / 60.0
 
         # NaN/Inf 防护——极端值后重设
         for ch in Channel:
@@ -314,65 +405,107 @@ class EmotionEngine:
             )
             trace_data.atmosphere_before = atmosphere_before
             if raw_elapsed_minutes < 0:
-                trace_data.notes.append("clock_went_backwards: elapsed clamped to 0")
+                trace_data.notes.append(
+                    "clock_went_backwards: elapsed clamped to 0"
+                )
 
         # Step 0: 保存上一帧快照（对比度用）
         self.state.snapshot_previous()
 
-        # Step 1: 弹性衰减（偏离基线越远衰减越快）
-        baseline = self.personality.baseline()
+        return _TickContext(
+            now=now,
+            raw_elapsed_minutes=raw_elapsed_minutes,
+            elapsed_minutes=elapsed_minutes,
+            elapsed_hours=elapsed_hours,
+            appraisal=appraisal,
+            boundary_violation=boundary_violation,
+            appraisal_bias=appraisal_bias,
+            trace_data=trace_data,
+            baseline=self.personality.baseline(),
+            atmosphere_before=atmosphere_before,
+        )
+
+    def _step_decay(self, ctx: _TickContext) -> None:
+        """Step 1: 弹性衰减与思念消退。"""
+        baseline = ctx.baseline
 
         # 思念在线时消退——人在身边，思有所归
         # 但有 love 时不会归零——爱着的人即使见面也隐约知道会再分开
         if self.state.longing > 0:
-            longing_decay = 0.3 * elapsed_hours if elapsed_hours > 0 else 0.05
+            longing_decay = (
+                0.3 * ctx.elapsed_hours if ctx.elapsed_hours > 0 else 0.05
+            )
             floor = self.state.love * 0.05  # 残留底——爱还在
             self.state.longing = max(floor, self.state.longing - longing_decay)
 
         for ch in FAST_CHANNELS:
             val = getattr(self.state, ch.value)
-            hl  = HALF_LIFE[ch]
+            hl = HALF_LIFE[ch]
             if hl is not None:
                 # hyper 时负性情绪更难平复；hypo 时恢复也慢；正性不受影响。
                 hl *= self.tolerance.decay_scale_for(ch.value)
             # 弹性衰减：偏离越远越快
-            val = decay(val, hl, elapsed_minutes, baseline[ch])
+            val = decay(val, hl, ctx.elapsed_minutes, baseline[ch])
             # 基线回弹（轻拉力）
-            val = return_to_baseline(val, baseline[ch], elapsed_minutes)
+            val = return_to_baseline(val, baseline[ch], ctx.elapsed_minutes)
             setattr(self.state, ch.value, val)
 
-        if trace_data:
-            trace_data.mark("after_decay", self.state)
+        if ctx.trace_data:
+            ctx.trace_data.mark("after_decay", self.state)
 
-        # Step 2: 慢通道缓慢生长
+    def _step_slow_channels(self, ctx: _TickContext) -> None:
+        """Step 2: 慢通道缓慢生长。"""
         # L2: love 的正面事件增量只取“本 tick 新增”，不再用累计
         # positive_events。旧行为可用 legacy_slow_channels=True 复现。
         positive_now = 1 if (
-            appraisal is not None
-            and appraisal.goal_conduciveness > 0
-            and appraisal.other_agency > 0
+            ctx.appraisal is not None
+            and ctx.appraisal.goal_conduciveness > 0
+            and ctx.appraisal.other_agency > 0
         ) else 0
         positive_input = (
             self.positive_events if self.legacy_slow_channels else positive_now
         )
         grow_slow_channels(self.state, self.events_today,
-                           positive_input, elapsed_hours)
+                           positive_input, ctx.elapsed_hours)
+        ctx.positive_input = positive_input
 
-        if trace_data:
-            trace_data.mark("after_slow_channels", self.state)
-            trace_data.slow_positive_input = positive_input
+        if ctx.trace_data:
+            ctx.trace_data.mark("after_slow_channels", self.state)
+            ctx.trace_data.slow_positive_input = positive_input
 
-        # Step 3: 如果有新事件 → 认知评估 → 叠加
-        raw = {}
-        gated = {}
-        shock_channels = []
+    def _step_appraisal(self, ctx: _TickContext) -> None:
+        """Step 3: 记忆先验 → 认知评估 → 门控 → 伤疤 → 氛围 → 写入 state。"""
+        appraisal = ctx.appraisal
+        raw: Dict[Channel, float] = {}
+        gated: Dict[Channel, float] = {}
         gated_written: Dict[Channel, float] = {}
         scar_shift = 0.0
         scar_channels: List[str] = []
         atmosphere_applied = 0.0
         atmosphere_multipliers: Dict[str, float] = {}
-        shock_density = 0.0
-        atmosphere_arousal = 0.0
+
+        # L4: 记忆先验只在这里进入 Appraisal。无先验时不创建新对象、
+        # 不写 trace 字段，保持旧路径逐值不变。
+        if appraisal is not None and ctx.appraisal_bias:
+            ctx.appraisal_before_memory = {
+                name: float(getattr(appraisal, name))
+                for name in APPRAISAL_LIMITS
+            }
+            biased = apply_appraisal_bias(appraisal, ctx.appraisal_bias)
+            for name in APPRAISAL_LIMITS:
+                delta = getattr(biased, name) - ctx.appraisal_before_memory[name]
+                if abs(delta) > 1e-12:
+                    ctx.memory_bias_applied[name] = delta
+            appraisal = biased
+            ctx.appraisal = appraisal
+            if ctx.trace_data:
+                ctx.trace_data.memory_bias_enabled = True
+                ctx.trace_data.memory_bias_applied = dict(
+                    ctx.memory_bias_applied
+                )
+                ctx.trace_data.appraisal_before_memory = dict(
+                    ctx.appraisal_before_memory
+                )
 
         if appraisal is not None:
             raw = appraise(
@@ -383,7 +516,7 @@ class EmotionEngine:
                 ),
             )
             gated = gate_appraisal(raw, self.state.trust, self.state.love,
-                                    boundary_violation=boundary_violation)
+                                   boundary_violation=ctx.boundary_violation)
 
             # 耐受窗调制：hyper 放大负性输入，hypo 降低反应强度。
             negative_gain = self.tolerance.negative_gain
@@ -404,7 +537,7 @@ class EmotionEngine:
             # 登记触发 / 正面反例
             tag = self.scars.detect(appraisal)
             if tag and appraisal.goal_conduciveness < 0:
-                self.scars.register(tag, now)
+                self.scars.register(tag, ctx.now)
             elif tag and appraisal.goal_conduciveness > 0:
                 self.scars.register_positive(tag)
 
@@ -412,9 +545,9 @@ class EmotionEngine:
             # legacy 仍在写入之后调制，以复现旧行为。
             if not self.legacy_atmosphere:
                 gated, atmosphere_multipliers = apply_atmosphere_modulation(
-                    gated, atmosphere_before,
+                    gated, ctx.atmosphere_before,
                 )
-                atmosphere_applied = atmosphere_before
+                atmosphere_applied = ctx.atmosphere_before
 
             # 记录真正写入 state 的 gated（legacy 下这是晚调制前的版本）。
             gated_written = dict(gated)
@@ -429,99 +562,123 @@ class EmotionEngine:
 
             # 检测背叛（信任破坏）
             if (appraisal.goal_conduciveness < -0.5
-                and appraisal.other_agency > 0.5):
+                    and appraisal.other_agency > 0.5):
                 damage_trust(self.state, abs(appraisal.goal_conduciveness))
 
             self.events_today += 1
             if appraisal.goal_conduciveness > 0 and appraisal.other_agency > 0:
                 self.positive_events += 1
 
-        if trace_data:
-            trace_data.mark("after_appraisal", self.state)
+        ctx.raw = raw
+        ctx.gated = gated
+        ctx.gated_written = gated_written
+        ctx.scar_shift = scar_shift
+        ctx.scar_channels = list(scar_channels)
+        ctx.atmosphere_applied = atmosphere_applied
+        ctx.atmosphere_multipliers = atmosphere_multipliers
 
+        if ctx.trace_data:
+            ctx.trace_data.mark("after_appraisal", self.state)
+
+    def _step_after_appraisal(self, ctx: _TickContext) -> None:
+        """Step 4: 氛围/越界处理；legacy 的晚调制也在这里。"""
         # 氛围目标使用的唤醒度：state 写入后、interactions 前捕获。
         # 这样 corrected 相对 legacy 的差异只来自 shock 密度本身。
-        atmosphere_arousal = (self.state.fear + self.state.sadness) / 2.0
+        ctx.atmosphere_arousal = (self.state.fear + self.state.sadness) / 2.0
 
         if self.legacy_atmosphere:
             # ── pre-L3 兼容路径：先漂移，再晚调制 gated ──
             # 此时 shock 尚未检测，shock_channels 仍为空，密度恒为 0。
-            recent_shock_intensity = len(shock_channels) / max(
+            recent_shock_intensity = len(ctx.shock_channels) / max(
                 1, len(FAST_CHANNELS),
             )
             self._recent_shocks.append(recent_shock_intensity)
             if len(self._recent_shocks) > 5:
                 self._recent_shocks.pop(0)
 
-            shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
+            ctx.shock_density = (
+                sum(self._recent_shocks) / len(self._recent_shocks)
+            )
             self.atmosphere = drift_atmosphere(
                 self.atmosphere,
-                shock_density=shock_density,
-                arousal=atmosphere_arousal,
-                boundary_violation=boundary_violation,
+                shock_density=ctx.shock_density,
+                arousal=ctx.atmosphere_arousal,
+                boundary_violation=ctx.boundary_violation,
                 clamp=False,
             )
 
             # 旧版晚调制：写入 state 后只影响输出/快照。
-            if appraisal is not None:
+            if ctx.appraisal is not None:
                 gated, atmosphere_multipliers = apply_atmosphere_modulation(
-                    gated, self.atmosphere,
+                    ctx.gated, self.atmosphere,
                 )
-                atmosphere_applied = self.atmosphere
+                ctx.gated = gated
+                ctx.atmosphere_multipliers = atmosphere_multipliers
+                ctx.atmosphere_applied = self.atmosphere
 
             # 越界惩罚：低信任时被越界称呼 → trust 降
-            if boundary_violation and self.state.trust < 0.5:
+            if ctx.boundary_violation and self.state.trust < 0.5:
                 self.state.trust = max(
                     0.01,
                     self.state.trust - (0.5 - self.state.trust) * 0.3,
                 )
 
-            if trace_data:
-                trace_data.mark("after_atmosphere", self.state)
-                if appraisal is not None and abs(self.atmosphere) > 1e-9:
-                    trace_data.notes.append(
+            if ctx.trace_data:
+                ctx.trace_data.mark("after_atmosphere", self.state)
+                if ctx.appraisal is not None and abs(self.atmosphere) > 1e-9:
+                    ctx.trace_data.notes.append(
                         "atmosphere gate mutates gated after state write "
                         "(preserved L0 behavior)"
                     )
         else:
             # ── L3 corrected：越界惩罚在 interactions 前；氛围在 shock 后更新 ──
-            if boundary_violation and self.state.trust < 0.5:
+            if ctx.boundary_violation and self.state.trust < 0.5:
                 self.state.trust = max(
                     0.01,
                     self.state.trust - (0.5 - self.state.trust) * 0.3,
                 )
 
-        if trace_data:
-            trace_data.raw_appraisal = {k.value: v for k, v in raw.items()}
-            trace_data.gated_appraisal = {k.value: v for k, v in gated.items()}
-            trace_data.gated_written = {
-                k.value: v for k, v in gated_written.items()
+        if ctx.trace_data:
+            ctx.trace_data.raw_appraisal = {
+                k.value: v for k, v in ctx.raw.items()
             }
-            trace_data.scar_shift = scar_shift
-            trace_data.scar_channels = list(scar_channels)
-            trace_data.atmosphere_multipliers = dict(atmosphere_multipliers)
+            ctx.trace_data.gated_appraisal = {
+                k.value: v for k, v in ctx.gated.items()
+            }
+            ctx.trace_data.gated_written = {
+                k.value: v for k, v in ctx.gated_written.items()
+            }
+            ctx.trace_data.scar_shift = ctx.scar_shift
+            ctx.trace_data.scar_channels = list(ctx.scar_channels)
+            ctx.trace_data.atmosphere_multipliers = dict(
+                ctx.atmosphere_multipliers
+            )
 
-        # Step 5: 交互矩阵（负性交互强度受耐受窗调制）
+    def _step_interactions(self, ctx: _TickContext) -> None:
+        """Step 5a: 交互矩阵。"""
         # L1.1: 默认只让“高于人格基线”的激活参与交互，避免基线本身
         # 在无事件时被当成情绪活动。legacy_interactions=True 保留旧行为。
         interaction_baseline = interaction_baselines(
             self.personality, self.state.love,
-        ) if not self.legacy_slow_channels else baseline
-        blends = apply_interactions(
+        ) if not self.legacy_slow_channels else ctx.baseline
+        ctx.blends = apply_interactions(
             self.state,
             negative_scale=self.tolerance.interaction_scale,
-            baseline=None if self.legacy_interactions else interaction_baseline,
+            baseline=(
+                None if self.legacy_interactions else interaction_baseline
+            ),
             trust_ceiling=(
                 None if self.legacy_slow_channels
                 else trust_target(self.state.love)
             ),
         )
 
-        if trace_data:
-            trace_data.mark("after_interaction", self.state)
-            trace_data.trust_target = trust_target(self.state.love)
+        if ctx.trace_data:
+            ctx.trace_data.mark("after_interaction", self.state)
+            ctx.trace_data.trust_target = trust_target(self.state.love)
 
-        # Step 5: 对比度冲击感（指数级 Δ 感知，带安全截断）
+    def _step_shock(self, ctx: _TickContext) -> None:
+        """Step 5b: 对比度冲击检测，以及 corrected 的氛围漂移。"""
         for ch in FAST_CHANNELS:
             raw_delta = abs(self.state.delta(ch))
             # 指数冲击——但 clamp 输入防止溢出
@@ -529,69 +686,80 @@ class EmotionEngine:
             shock = math.exp(clamped * 2.0) - 1
             threshold = SHOCK_WEIGHT.get(ch, 0.3)
             if shock > threshold:
-                shock_channels.append(ch.value)
+                ctx.shock_channels.append(ch.value)
 
         if self.legacy_atmosphere:
-            if trace_data:
-                trace_data.shock_channels = list(shock_channels)
-                trace_data.blends = list(blends)
+            if ctx.trace_data:
+                ctx.trace_data.shock_channels = list(ctx.shock_channels)
+                ctx.trace_data.blends = list(ctx.blends)
                 # pre-L3：氛围在本轮 shock 检测前采样，密度恒为 0。
-                trace_data.notes.append(
+                ctx.trace_data.notes.append(
                     "shock density sampled before shock detection "
                     "(preserved L0 behavior)"
                 )
         else:
             # L3 corrected：先检测 shock，再用本 tick 密度漂移氛围。
             # 新氛围作用于下一 tick 的 gated；避免同 tick 循环依赖。
-            recent_shock_intensity = len(shock_channels) / max(
+            recent_shock_intensity = len(ctx.shock_channels) / max(
                 1, len(FAST_CHANNELS),
             )
             self._recent_shocks.append(recent_shock_intensity)
             if len(self._recent_shocks) > 5:
                 self._recent_shocks.pop(0)
 
-            shock_density = sum(self._recent_shocks) / len(self._recent_shocks)
+            ctx.shock_density = (
+                sum(self._recent_shocks) / len(self._recent_shocks)
+            )
             self.atmosphere = drift_atmosphere(
                 self.atmosphere,
-                shock_density=shock_density,
-                arousal=atmosphere_arousal,
-                boundary_violation=boundary_violation,
+                shock_density=ctx.shock_density,
+                arousal=ctx.atmosphere_arousal,
+                boundary_violation=ctx.boundary_violation,
                 clamp=True,
             )
 
-            if trace_data:
-                trace_data.shock_channels = list(shock_channels)
-                trace_data.blends = list(blends)
-                trace_data.mark("after_atmosphere", self.state)
-                trace_data.notes.append(
+            if ctx.trace_data:
+                ctx.trace_data.shock_channels = list(ctx.shock_channels)
+                ctx.trace_data.blends = list(ctx.blends)
+                ctx.trace_data.mark("after_atmosphere", self.state)
+                ctx.trace_data.notes.append(
                     "L3 corrected: shock detected before atmosphere update; "
                     "density applies next tick"
                 )
-                if (appraisal is not None
-                        and abs(atmosphere_applied) > 1e-9):
-                    trace_data.notes.append(
+                if (ctx.appraisal is not None
+                        and abs(ctx.atmosphere_applied) > 1e-9):
+                    ctx.trace_data.notes.append(
                         "L3 corrected: atmosphere gate applied before state write"
                     )
 
-        # Step 6: 记忆存储 + 固化（带 novelty gate）
-        if appraisal is not None:
-            arousal  = self.state.surprise + len(shock_channels) * 0.5
+    def _step_memory_and_saga(self, ctx: _TickContext) -> None:
+        """Step 6/7: 旧版记忆存储、固化与 Saga 拉力。"""
+        if ctx.appraisal is not None:
+            arousal = self.state.surprise + len(ctx.shock_channels) * 0.5
             # Novelty gate: 30min 内同 arousal ±0.15 且同 relevance ±0.2 → 跳过
-            recent = self.memory.recent_items(now, 30) if hasattr(self.memory, 'recent_items') else \
-                     [m for m in getattr(self.memory, 'short_term', [])
-                      if now - m.timestamp < 30 * 60]
+            recent = (
+                self.memory.recent_items(ctx.now, 30)
+                if hasattr(self.memory, "recent_items")
+                else [
+                    m for m in getattr(self.memory, "short_term", [])
+                    if ctx.now - m.timestamp < 30 * 60
+                ]
+            )
             is_novel = all(
                 abs(m.arousal - arousal) > 0.15 or
-                abs(m.relevance - appraisal.goal_relevance) > 0.2
+                abs(m.relevance - ctx.appraisal.goal_relevance) > 0.2
                 for m in recent
             )
             if is_novel or len(recent) == 0:
                 mem = MemoryItem(
-                    content=f"gc={appraisal.goal_conduciveness:.1f} gr={appraisal.goal_relevance:.1f}",
-                    timestamp=now,
+                    content=(
+                        f"gc={ctx.appraisal.goal_conduciveness:.1f} "
+                        f"gr={ctx.appraisal.goal_relevance:.1f}"
+                    ),
+                    timestamp=ctx.now,
                     emotion_snap=self.state.to_dict(),
                     arousal=arousal,
-                    relevance=appraisal.goal_relevance,
+                    relevance=ctx.appraisal.goal_relevance,
                 )
                 self.memory.store(mem)
 
@@ -601,7 +769,7 @@ class EmotionEngine:
         self.memory.decay_short_term()
 
         # Step 7: Saga 效应（每累计 24h 应用一次长期记忆基线拉力）
-        saga_elapsed = (now - self._last_saga) / 3600.0  # 小时
+        saga_elapsed = (ctx.now - self._last_saga) / 3600.0  # 小时
         if saga_elapsed > 24 and (self.memory.flash or self.memory.long_term):
             baseline = self.personality.baseline()
             pull = self.memory.saga_pull(baseline)
@@ -613,8 +781,10 @@ class EmotionEngine:
                         # Saga 拉力轻柔——每次最多移动 0.02
                         clamped = max(-0.02, min(0.02, offset))
                         setattr(self.state, ch_name, current + clamped)
-            self._last_saga = now
+            self._last_saga = ctx.now
 
+    def _step_meta_and_tolerance(self, ctx: _TickContext) -> None:
+        """Step 8: meta 预计算 → 耐受窗刷新 → trace 收尾。"""
         # L5: 可选的 meta 负荷必须在耐受窗更新前算好。只消费上一 tick
         # 的 zone/overload，避免 meta ↔ tolerance 在同一 tick 内互相反馈。
         meta_state = None
@@ -629,37 +799,40 @@ class EmotionEngine:
                 state=self.state,
                 baseline=self.personality.baseline(),
                 personality=self.personality,
-                appraisal=appraisal,
+                appraisal=ctx.appraisal,
                 atmosphere=self.atmosphere,
                 tolerance_zone=self.tolerance.zone,
                 overload_ratio=self.tolerance.overload_ratio,
-                scar_pressure=scar_shift,
-                scar_channels=tuple(scar_channels),
-                blends=tuple(blends),
+                scar_pressure=ctx.scar_shift,
+                scar_channels=tuple(ctx.scar_channels),
+                blends=tuple(ctx.blends),
                 profile=self.meta_emotion_profile,
             )
             meta_load_bias = meta_state.regulation_bias.tolerance_load_bias
+        ctx.meta_state = meta_state
+        ctx.meta_load_bias = meta_load_bias
 
         # Step 8: 刷新耐受窗。放在通道与氛围更新之后，
         # 让本 tick 的过载在下一 tick 才影响增益（带两 tick 滞回）。
         self._update_tolerance(
-            shock_channels=tuple(shock_channels),
-            boundary_violation=boundary_violation,
-            elapsed_hours=elapsed_hours,
+            shock_channels=tuple(ctx.shock_channels),
+            boundary_violation=ctx.boundary_violation,
+            elapsed_hours=ctx.elapsed_hours,
             meta_load_bias=meta_load_bias,
         )
 
         # 更新计时器
-        self.state._last_update = now
+        self.state._last_update = ctx.now
 
-        if trace_data:
-            trace_data.mark("final", self.state)
-            trace_data.atmosphere = self.atmosphere
-            trace_data.atmosphere_after = self.atmosphere
-            trace_data.atmosphere_applied = atmosphere_applied
-            trace_data.atmosphere_shock_density = shock_density
-            trace_data.atmosphere_arousal = atmosphere_arousal
-            trace_data.tolerance_zone = self.tolerance.zone
+        if ctx.trace_data:
+            trace = ctx.trace_data
+            trace.mark("final", self.state)
+            trace.atmosphere = self.atmosphere
+            trace.atmosphere_after = self.atmosphere
+            trace.atmosphere_applied = ctx.atmosphere_applied
+            trace.atmosphere_shock_density = ctx.shock_density
+            trace.atmosphere_arousal = ctx.atmosphere_arousal
+            trace.tolerance_zone = self.tolerance.zone
             # L3.5: 元情绪只读最终状态与上下文，只写 trace。
             # 放在所有 state / atmosphere / tolerance 更新之后，确保不反向
             # 影响本 tick 或后续曲线。
@@ -669,39 +842,49 @@ class EmotionEngine:
                         state=self.state,
                         baseline=self.personality.baseline(),
                         personality=self.personality,
-                        appraisal=appraisal,
+                        appraisal=ctx.appraisal,
                         atmosphere=self.atmosphere,
                         tolerance_zone=self.tolerance.zone,
                         overload_ratio=self.tolerance.overload_ratio,
-                        scar_pressure=trace_data.scar_shift,
-                        scar_channels=tuple(trace_data.scar_channels),
-                        blends=tuple(blends),
+                        scar_pressure=trace.scar_shift,
+                        scar_channels=tuple(trace.scar_channels),
+                        blends=tuple(ctx.blends),
                         profile=self.meta_emotion_profile,
                     )
                 meta_payload = meta_state.to_trace_dict()
-                trace_data.meta_enabled = True
-                trace_data.meta_appraisal = meta_payload["meta_appraisal"]
-                trace_data.meta_emotions = meta_payload["meta_emotions"]
-                trace_data.regulation_bias = meta_payload["regulation_bias"]
+                trace.meta_enabled = True
+                trace.meta_appraisal = meta_payload["meta_appraisal"]
+                trace.meta_emotions = meta_payload["meta_emotions"]
+                trace.regulation_bias = meta_payload["regulation_bias"]
 
-        # 输出
+    def _build_tick_result(self, ctx: _TickContext) -> Dict:
+        """把 tick 的最终状态与 trace 组装成返回值。"""
         felt = self.state.felt_all()
         mem_stats = self.memory.stats()
         result = {
             "state":          self.state.to_dict(),
             "felt":           felt,  # log压缩后的感知值
-            "blends":         blends,
-            "shock_channels": shock_channels,
-            "raw_appraisal":  {k.value: round(v, 3) for k, v in raw.items()},
-            "gated_appraisal":{k.value: round(v, 3) for k, v in gated.items()},
+            "blends":         ctx.blends,
+            "shock_channels": ctx.shock_channels,
+            "raw_appraisal":  {
+                k.value: round(v, 3) for k, v in ctx.raw.items()
+            },
+            "gated_appraisal": {
+                k.value: round(v, 3) for k, v in ctx.gated.items()
+            },
             "trust":          round(self.state.trust, 3),
             "love":           round(self.state.love, 3),
             "memory":         mem_stats,
             "atmosphere":     round(self.atmosphere, 3),
             "tolerance":      self.tolerance.to_dict(),
         }
-        if trace_data is not None:
-            result["trace"] = trace_data.to_dict()
+        if ctx.appraisal_before_memory:
+            result["memory_bias"] = {
+                key: round(value, 4)
+                for key, value in ctx.memory_bias_applied.items()
+            }
+        if ctx.trace_data is not None:
+            result["trace"] = ctx.trace_data.to_dict()
         return result
 
 
@@ -795,6 +978,10 @@ class SensitizationStore:
 # ══════════════════════════════════════════════════════
 
 DB_PATH = "emotion.db"
+# 快照 payload schema：v1 = 无版本字段的旧 payload / 直接通道字典；
+# v2 = 当前完整 payload。每次改变 payload 形状时递增，并在
+# _migrate_snapshot_payload() 里补一段迁移。
+SNAPSHOT_VERSION = 2
 
 
 def _get_db(path: str = DB_PATH) -> sqlite3.Connection:
@@ -841,6 +1028,34 @@ def init_db(path: str = DB_PATH):
     return db
 
 
+def _migrate_snapshot_payload(data: Any) -> Optional[Dict[str, Any]]:
+    """把旧快照 payload 统一到当前 schema。
+
+    返回 None 表示无法安全读取：非 dict、版本号非法、或来自更新版本。
+    旧格式（v0.5-v0.6 直接把通道字典放在 state_json）会被包装成 v1。
+    """
+    if not isinstance(data, dict):
+        return None
+
+    # v0.5-v0.6：state_json 直接是通道字典，没有外层 payload。
+    if "state" not in data and any(ch.value in data for ch in Channel):
+        data = {"state": data}
+
+    version = data.get("schema_version", 1)
+    try:
+        version = int(version)
+    except (TypeError, ValueError):
+        return None
+    if version < 1 or version > SNAPSHOT_VERSION:
+        return None
+
+    payload = dict(data)
+    # v1 -> v2：只增加 schema_version 标记，数据形状不变。
+    # 未来改变字段时在这里按 version 做重命名/补默认值。
+    payload["schema_version"] = SNAPSHOT_VERSION
+    return payload
+
+
 def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH,
                   now: Optional[float] = None) -> bool:
     """保存完整引擎状态——断线恢复用。
@@ -855,6 +1070,7 @@ def save_snapshot(engine: "EmotionEngine", path: str = DB_PATH,
     db = _get_db(path)
     try:
         payload = {
+            "schema_version": SNAPSHOT_VERSION,
             "state": engine.state.to_dict(),
             "tolerance": engine.tolerance.to_dict(),
             "atmosphere": engine.atmosphere,
@@ -900,8 +1116,8 @@ def load_snapshot(engine: "EmotionEngine", path: str = DB_PATH) -> bool:
         if not row:
             return False
 
-        data = json.loads(row[0])
-        if not isinstance(data, dict):
+        data = _migrate_snapshot_payload(json.loads(row[0]))
+        if data is None:
             return False
         state_data = data.get("state", data)
         if not isinstance(state_data, dict):
@@ -1260,288 +1476,8 @@ class MemoryStore:
         }
 
 
-# ══════════════════════════════════════════════════════
-# v0.5 本地思维层 — 零 token 回应系统
-# ══════════════════════════════════════════════════════
-# 95% 的日常交互不需要 LLM。情绪状态 + 氛围 + 旧伤疤
-# 已经足够决定角色的反应。只在深度对话时才调用 LLM。
-
-# 行为倾向映射
-def _action_tendency(state: "EmotionalState", atmos: float,
-                     zone: str = "regulated") -> str:
-    """从情绪状态推导行为倾向——趋近 or 回避 or 防御。
-
-    L5.1：hypo 是关机而非“更强烈的回避”。趋近和回避都被压低，
-    方向判定也更钝，因此同等强度的冲突更容易落到 still。
-    """
-    approach = state.joy + state.trust + state.love
-    avoid    = state.fear + state.sadness + state.disgust
-    dominance_ratio = 1.2
-    if atmos > 0.3:
-        avoid *= 1.3  # 紧绷氛围放大回避
-    if zone == ZONE_HYPER:
-        approach *= 0.85  # 过载时战/逃，趋近冲动下降
-        avoid *= 1.25
-    elif zone == ZONE_HYPO:
-        approach *= 0.60  # 关机：趋近与回避都迟缓
-        avoid *= 0.55
-        dominance_ratio = 1.35
-    if approach > avoid * dominance_ratio:
-        return "approach"   # 趋近——想靠近
-    elif avoid > approach * dominance_ratio:
-        return "withdraw"   # 回避——想躲
-    else:
-        return "still"      # 僵住——不确定
-
-# 回应模板池（按角色 × 主导情绪）
-# 每个角色有自己的声音。Kokomi 战略家语气，Columbina 朦胧稀疏，Furina 戏剧化。
-_CHARACTER_POOLS = {
-    "kokomi": {
-        "joy_dominant": [
-            "太好了。", "不胜荣幸。", "这份战果……值得铭记。"
-        ],
-        "sadness_dominant": [
-            "无妨。", "只是……又想起了一些事。", "不必担心我。"
-        ],
-        "anger_dominant": [
-            "这是战术失误。", "我不会让部下白白牺牲。", "请把情报再说一遍。"
-        ],
-        "fear_dominant": [
-            "我……", "能给我一点时间吗。", "人太多了……"
-        ],
-        "surprise_dominant": [
-            "你说什么？", "不在计划之内……", "等、等一下——"
-        ],
-        "longing_dominant": [
-            "你终于来了。", "我还以为这次……你不会回来了。", "……那边的情况怎么样？"
-        ],
-        "guilt_dominant": [
-            "是我的责任。", "身为指挥官……不该有这种失误。", "你不该原谅我的。"
-        ],
-        "neutral": [
-            "嗯。", "继续。", "我在听。"
-        ],
-    },
-    "columbina": {
-        "joy_dominant": [
-            "……嗯。", "……暖暖的。", "第一次有人……这样看我。"
-        ],
-        "sadness_dominant": [
-            "……", "月光……好冷。", "不。只是……习惯了。"
-        ],
-        "anger_dominant": [
-            "……走开。", "别碰我。", "你不是他。"
-        ],
-        "fear_dominant": [
-            "……别盯着我看。", "太快了……", "我不能……"
-        ],
-        "surprise_dominant": [
-            "诶？", "……什么？", "你……在跟我说话？"
-        ],
-        "longing_dominant": [
-            "你……回来了。", "我还以为你不会再来了。", "……上次你说的话，我一直在想。"
-        ],
-        "guilt_dominant": [
-            "是我……害了你。", "我不该……", "对不起……"
-        ],
-        "neutral": [
-            "……", "嗯。", "……说吧。"
-        ],
-    },
-    "furina": {
-        "joy_dominant": [
-            "Bravo！太完美了！", "不愧是我~", "今天是个值得庆祝的日子！"
-        ],
-        "sadness_dominant": [
-            "……没什么，只是有点累了。", "别看我。", "好漫长……"
-        ],
-        "anger_dominant": [
-            "够了！", "你以为你在跟谁说话？！", "……不。当我没说。"
-        ],
-        "fear_dominant": [
-            "等一下……", "不要盯着我看……", "我不是……你不明白……"
-        ],
-        "surprise_dominant": [
-            "什——什么？！", "不可能！", "你……你刚才说什么？"
-        ],
-        "longing_dominant": [
-            "你来了。", "我还以为你不会来了……", "上一次有人这样等我……是500年前的事了。"
-        ],
-        "guilt_dominant": [
-            "是我……让所有人失望了。", "我演不下去了……", "对不起……让你看到这样的我。"
-        ],
-        "neutral": [
-            "嗯哼~", "什么事？", "说来听听。"
-        ],
-    },
-    "default": {
-        "joy_dominant": ["好。", "嗯。", "谢谢。"],
-        "sadness_dominant": ["……", "没什么。", "不用管我。"],
-        "anger_dominant": ["够了。", "别说了。", "……"],
-        "fear_dominant": ["等一下……", "我有点……", "不是你想的那样。"],
-        "surprise_dominant": ["诶？", "什么？", "真的吗？"],
-        "longing_dominant": ["你来了。", "好久不见。", "我还以为你忘了。"],
-        "guilt_dominant": ["是我不好。", "对不起。", "你不该原谅我的。"],
-        "neutral": ["嗯。", "……", "好。"],
-    },
-}
-
-# L5.1：超出耐受窗后，局部模板必须和 zone 一致，不能继续用平静时
-# 按主导情绪挑出的台词。hyper 是战/逃，hypo 是关机，不是“更平静”。
-_ZONE_POOLS = {
-    "kokomi": {
-        "hyper": [
-            "现在不适合继续谈。", "请退后。", "我需要重新判断局势。"
-        ],
-        "hypo": [
-            "……先到这里。", "我需要一点时间。", "……我听不清了。"
-        ],
-    },
-    "columbina": {
-        "hyper": [
-            "……别过来。", "远离我。", "……安静。"
-        ],
-        "hypo": [
-            "……", "让我安静。", "……好累。"
-        ],
-    },
-    "furina": {
-        "hyper": [
-            "别逼我。", "……我说了，够了。", "你还想怎样？！"
-        ],
-        "hypo": [
-            "……让我歇一会儿。", "我演不动了。", "……随便吧。"
-        ],
-    },
-    "default": {
-        "hyper": [
-            "别说了。", "让我一个人待着。", "我现在不想谈。"
-        ],
-        "hypo": [
-            "……", "让我静静。", "我现在不想说。"
-        ],
-    },
-}
-
-
-def _select_local_utterance(character_id: str, dominant: str, zone: str) -> str:
-    """按 zone 优先选择本地台词；只有 regulated 才按主导情绪挑。"""
-    import random
-    pool = _CHARACTER_POOLS.get(character_id, _CHARACTER_POOLS["default"])
-    if zone in (ZONE_HYPER, ZONE_HYPO):
-        zone_pool = _ZONE_POOLS.get(character_id, _ZONE_POOLS["default"])
-        return random.choice(zone_pool[zone])
-    return random.choice(pool.get(dominant, pool["neutral"]))
-
-
-# ══════════════════════════════════════════════════════
-# LLM 增强模式 — 可选。引擎已算完情绪，LLM 只负责表达。
-# ══════════════════════════════════════════════════════
-
-def _emotion_snapshot(state: "EmotionalState") -> Dict[str, float]:
-    """把状态压成可存入关系记忆的纯数值快照。"""
-    return {ch.value: float(getattr(state, ch.value, 0.0)) for ch in Channel}
-
-
-def _build_llm_prompt(engine: "EmotionEngine", user_input: str,
-                      character_name: str, character_desc: str,
-                      recent_memories: List["MemoryItem"],
-                      memory_context: str = "") -> str:
-    """构建 LLM prompt——引擎状态已注入，LLM 只做表达。
-
-    memory_context 来自 memory.MemoryService.build_context()，
-    是关系域、压缩后的记忆区块；优先于旧版的 recent_memories。
-    """
-    s = engine.state
-    mem_text = ""
-    if memory_context:
-        mem_text = memory_context
-    elif recent_memories:
-        mem_text = "Relevant memories:\n" + "\n".join(
-            f"- {m.content}" for m in recent_memories[:3]
-        )
-
-    dominant = _dominant_channel(s)
-    # 将数值翻译成 AI 能理解的行为指令
-    mood_hint = _mood_hint(
-        s, dominant, engine.atmosphere, engine.tolerance.to_dict(),
-    )
-
-    return f"""You are {character_name}. {character_desc}
-
-Your current emotional state:
-  {mood_hint}
-  (joy={s.joy:.1f} sad={s.sadness:.1f} anger={s.anger:.1f} fear={s.fear:.1f}
-   trust={s.trust:.1f} love={s.love:.1f} guilt={s.guilt:.1f} longing={s.longing:.1f})
-
-{mem_text}
-
-User said: "{user_input}"
-
-Respond in character. 2-3 natural Chinese sentences, spoken aloud (not narration).
-Your mood affects HOW you speak — see the mood hint above and let it color your tone."""
-
-
-def _mood_hint(s: "EmotionalState", dominant: str, atmosphere: float,
-               tolerance: Optional[Dict[str, object]] = None) -> str:
-    """将情绪数值翻译成 LLM 能理解的口吻描述"""
-    parts = []
-
-    # 主导情绪 → 核心语气
-    dom_hints = {
-        "joy_dominant":      "你很开心，语气轻快上扬，可能带笑",
-        "sadness_dominant":  "你很难过，语气低沉缓慢，话少",
-        "anger_dominant":    "你在生气，语气尖锐或冷淡，可能带刺",
-        "fear_dominant":     "你很不安，语气犹豫颤抖，回避正面回答",
-        "surprise_dominant": "你很惊讶，语气急促，可能语无伦次",
-        "longing_dominant":  "你在思念某人，语气温柔带苦涩，话尾拖长",
-        "guilt_dominant":    "你在愧疚，语气自责收敛，不敢直视",
-        "neutral":           "你心情平静，语气平稳自然",
-    }
-    if dominant in dom_hints:
-        parts.append(dom_hints[dominant])
-
-    # 信任度
-    if s.trust < 0.2:
-        parts.append("你很不信任对方，说话防备疏离。任何亲密称呼都让你反感")
-    elif s.trust > 0.7:
-        parts.append("你非常信任对方，说话坦诚放松")
-
-    # 亲密度：trust+love 双高才接受亲密
-    intimacy = (s.trust + s.love) / 2
-    if intimacy > 0.7:
-        parts.append("你和对方很亲密，可以接受亲昵称呼，甚至会回应")
-    elif intimacy < 0.3:
-        parts.append("你和对方不熟，亲密称呼让你尴尬，会冷淡拒绝")
-
-    # 爱
-    if s.love > 0.6:
-        parts.append("你很在乎对方，话里带关切")
-    elif s.love < 0.1:
-        parts.append("你不在意对方，冷淡敷衍")
-
-    # 氛围：+1 紧绷 / -1 轻松
-    if atmosphere > 0.3:
-        parts.append("氛围紧绷，你紧张克制")
-    elif atmosphere < -0.3:
-        parts.append("氛围轻松，你比较放得开")
-
-    # 耐受窗：超过容量后不是“更激烈地演”，而是失去调节能力
-    zone = tolerance.get("zone") if tolerance else None
-    if zone == ZONE_HYPER:
-        parts.append("你已经超出耐受窗：容易战或逃，语气更冲、更防御，很难继续忍耐")
-    elif zone == ZONE_HYPO:
-        parts.append("你已经超出耐受窗并进入低唤醒：反应变慢、想关机、话变少，这不是平静")
-
-    # 愧疚
-    if s.guilt > 0.3:
-        parts.append("你做错了事，想弥补或道歉")
-
-    # 思念
-    if s.longing > 0.3:
-        parts.append("你在想一个人，话里带等待的情绪")
-
-    return "。".join(parts) + "。"
+# 表达层已移到 expression.py；名字在本文件顶部 import，
+# 旧路径 `from engine import _build_llm_prompt` 等仍然可用。
 
 
 def respond_llm(engine: "EmotionEngine", user_input: str,
@@ -1557,7 +1493,15 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
                 memory_context: Optional[str] = None,
                 relationship_memory: Any = None,
                 user_id: str = "default",
-                record_turn: bool = True) -> Dict:
+                record_turn: bool = True,
+                appraisal: Optional["Appraisal"] = None,
+                memory_appraisal_bias: Optional[Dict[str, float]] = None,
+                use_jev: bool = False,
+                jev: Any = None,
+                auto_boundary: bool = False,
+                boundary_violation: Optional[bool] = None,
+                trace: bool = False,
+                ) -> Dict:
     """
     LLM 增强回应——引擎算情绪，LLM 写表达。
     主 API 失败 → fallback API → 都失败则回退到本地模板。
@@ -1565,9 +1509,71 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
     relationship_memory: 可选的 memory.MemoryService。
       传入后，用关系域记忆构建 prompt，并在回复后尝试抽取记忆。
     memory_context: 外部已构建好的记忆区块；优先级高于自动召回。
+    appraisal: 可选六维评估；L4 记忆先验只通过它进入引擎。
+    memory_appraisal_bias: 外部已有的六维记忆先验；不传则按关系域自动召回。
+    use_jev: 没有 appraisal 时，用 JEV 从 user_input 生成六维评估。
+      默认关闭，保持旧调用行为不变。
+    jev: 可注入的 jev.JEV 实例（便于测试 / 自定义缓存）。
+    auto_boundary: 用 Noul 检测文本边界侵犯；显式 boundary_violation 优先。
+    boundary_violation: 调用方已经判定好的边界侵犯；None 表示未判定。
+    trace: 是否在返回值里附带 StepTrace（用于回放/仪表盘）。
     """
+    jev_result = None
+    jev_error = None
+    if appraisal is None and use_jev:
+        try:
+            if jev is None:
+                from jev import analyze as analyze_text
+                jev_result = analyze_text(user_input)
+            else:
+                jev_result = jev.analyze(user_input)
+            appraisal = jev_result.appraisal
+        except Exception as exc:  # JEV 不可用时全链路仍可运行
+            jev_error = str(exc)
+
+    boundary_signal = None
+    boundary_error = None
+    if boundary_violation is None:
+        boundary_violation = False
+        if auto_boundary:
+            try:
+                from noul import detect as detect_boundary
+                boundary_signal = detect_boundary(
+                    user_input, trust=engine.state.trust,
+                )
+                boundary_violation = boundary_signal.violated
+            except Exception as exc:
+                boundary_error = str(exc)
+
+    # L4：先取有界记忆先验，再跑情绪引擎。没有 appraisal 时先验不会
+    # 直接拉状态，只保留在返回值里供上游 JEV / 调试使用。
+    prior_error = None
+    if relationship_memory is not None and memory_appraisal_bias is None:
+        try:
+            memory_appraisal_bias = relationship_memory.appraisal_prior(
+                character_id, user_id,
+            )
+        except Exception as exc:
+            prior_error = str(exc)
+
     # 先跑情绪引擎
-    local = respond(engine, user_input, character_id=character_id)
+    local = respond(
+        engine, user_input, appraisal=appraisal,
+        character_id=character_id,
+        memory_appraisal_bias=memory_appraisal_bias,
+        boundary_violation=boundary_violation,
+        trace=trace,
+    )
+    if prior_error:
+        local["_memory_prior_error"] = prior_error
+    if jev_result is not None:
+        local["_jev"] = jev_result.to_dict()
+    if jev_error:
+        local["_jev_error"] = jev_error
+    if boundary_signal is not None:
+        local["_boundary"] = boundary_signal.to_dict()
+    if boundary_error:
+        local["_boundary_error"] = boundary_error
 
     # 旧版全局记忆（没有关系域记忆服务时使用）
     recent = []
@@ -1594,41 +1600,18 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
                                character_desc, recent,
                                memory_context=relational_context)
 
-    # 按顺序尝试 API：主 → fallback
-    backends = [
-        (api_key or os.environ.get('DEEPSEEK_API_KEY', ''), base_url, model, "DeepSeek"),
-    ]
-    if fallback_key:
-        backends.append((fallback_key, fallback_url, fallback_model, "Kimi"))
-
-    llm_text = None
-    for key, url, mdl, tag in backends:
-        if not key:
-            continue
-        try:
-            import urllib.request, urllib.error
-            data = json.dumps({
-                "model": mdl,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 200,
-                "temperature": 0.7,
-            }).encode("utf-8")
-
-            req = urllib.request.Request(
-                f"{url}/chat/completions",
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {key}"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-                llm_text = body["choices"][0]["message"]["content"].strip()
-                local["_llm_backend"] = tag
-                break  # 成功，跳出
-        except Exception:
-            continue  # 试下一个
+    # 按顺序尝试 API：主 → fallback。网络细节在 llm_client。
+    llm_text, llm_backend = call_llm(
+        prompt,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        fallback_key=fallback_key,
+        fallback_url=fallback_url,
+        fallback_model=fallback_model,
+    )
+    if llm_backend:
+        local["_llm_backend"] = llm_backend
 
     local["_llm_used"] = llm_text is not None
     if llm_text:
@@ -1644,6 +1627,7 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
                 user_id=user_id,
                 user_text=user_input,
                 assistant_text=local.get("utterance", ""),
+                appraisal=appraisal,
                 emotion_snap=_emotion_snapshot(engine.state),
             )
         except Exception as exc:
@@ -1651,73 +1635,29 @@ def respond_llm(engine: "EmotionEngine", user_input: str,
 
     return local
 
-def _dominant_channel(state: "EmotionalState") -> str:
-    """返回当前最突出的情绪通道标签"""
-    candidates = [
-        ("joy_dominant",      state.joy),
-        ("sadness_dominant",  state.sadness),
-        ("anger_dominant",    state.anger),
-        ("fear_dominant",     state.fear),
-        ("surprise_dominant", state.surprise),
-        ("longing_dominant",  state.longing),
-        ("guilt_dominant",    state.guilt),
-    ]
-    best = max(candidates, key=lambda x: x[1])
-    return best[0] if best[1] > 0.3 else "neutral"
-
-
-def _expression_params(state: "EmotionalState", zone: str = "regulated") -> Dict[str, float]:
-    """Live2D 表情映射。regulated 保持原曲线，hyper/hypo 叠加一致性修正。
-
-    hyper：紧张防御——眉压更低、嘴更收紧、眼睛睁大、目光回避、脸红受抑。
-    hypo：低唤醒关机——整体幅度压平，眼睛半闭、目光下垂、头微垂。
-    """
-    brow = -0.5 + state.joy * 0.8 - state.sadness * 0.6
-    mouth = -0.3 + state.joy * 0.7 - state.anger * 0.3
-    eye = 0.8 + state.surprise * 0.4 - state.fear * 0.1
-    blush = min(1.0, state.joy * 0.4 + state.guilt * 0.3)
-    gaze = state.longing * 0.5 - state.fear * 0.3
-    head = state.sadness * 0.3 + state.guilt * 0.2
-
-    if zone == ZONE_HYPER:
-        brow -= 0.15
-        mouth -= 0.20
-        eye += 0.15
-        blush *= 0.55
-        gaze -= 0.20
-    elif zone == ZONE_HYPO:
-        brow = brow * 0.55 - 0.18
-        mouth = mouth * 0.45 - 0.10
-        eye *= 0.62
-        blush *= 0.35
-        gaze *= 0.45
-        head = head * 0.60 + 0.10
-
-    values = {
-        "brow_angle": brow,
-        "mouth_curve": mouth,
-        "eye_open": eye,
-        "blush": blush,
-        "gaze_direction": gaze,
-        "head_tilt": head,
-    }
-    if zone in (ZONE_HYPER, ZONE_HYPO):
-        values = {
-            key: max(-1.0, min(1.0, value))
-            for key, value in values.items()
-        }
-    return {key: round(value, 3) for key, value in values.items()}
-
-
 def respond(engine: "EmotionEngine", event_type: str,
             appraisal: Optional["Appraisal"] = None,
-            character_id: str = "default") -> Dict:
+            character_id: str = "default",
+            memory_appraisal_bias: Optional[Dict[str, float]] = None,
+            boundary_violation: bool = False,
+            trace: bool = False) -> Dict:
     """
     纯本地计算。零 API 调用。
     character_id: 选角色专属模板；hyper/hypo 时 zone 优先于主导情绪。
+    memory_appraisal_bias: L4 记忆先验；无 appraisal 时不会拉状态。
+    boundary_violation: 文本/上游已判定的边界侵犯。
+    trace: 是否在返回值里附带 StepTrace。
     返回: 表情参数 + 行为倾向 + 简短回应 + 是否需要 LLM。
     """
-    result = engine.tick(appraisal) if appraisal else engine.tick()
+    tick_kwargs: Dict[str, Any] = {}
+    if memory_appraisal_bias:
+        tick_kwargs["appraisal_bias"] = memory_appraisal_bias
+    result = engine.tick(
+        appraisal,
+        boundary_violation=boundary_violation,
+        trace=trace,
+        **tick_kwargs,
+    )
     s = result["state"]
     atmos = result.get("atmosphere", 0)
 
@@ -1734,7 +1674,7 @@ def respond(engine: "EmotionEngine", event_type: str,
                  len(result.get("blends", [])) > 2 or
                  zone in (ZONE_HYPER, ZONE_HYPO))
 
-    return {
+    response = {
         # Live2D 参数映射（L5.1 起与 zone 一致）
         "expression":      _expression_params(engine.state, zone),
         # 行为
@@ -1750,7 +1690,14 @@ def respond(engine: "EmotionEngine", event_type: str,
         # 底层情绪数据（调试用）
         "_state":          s,
         "_dominant":       dom,
+        "shock_channels":  result.get("shock_channels", []),
+        "blends":          result.get("blends", []),
     }
+    if "memory_bias" in result:
+        response["memory_bias"] = result["memory_bias"]
+    if trace and "trace" in result:
+        response["trace"] = result["trace"]
+    return response
 
 
 # ══════════════════════════════════════════════════════
@@ -1832,7 +1779,7 @@ if __name__ == "__main__":
                             scars=SensitizationStore())
     if load_snapshot(engine2, "test_emotion.db"):
         print(f"  Restored! trust={engine2.state.trust:.3f} guilt={engine2.state.guilt:.3f}")
-        print(f"  State preserved across restart: OK")
+        print("  State preserved across restart: OK")
     else:
         print("  Restore failed")
 

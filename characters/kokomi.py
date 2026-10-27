@@ -7,12 +7,12 @@
   wiki文字 → OCEAN人格 → 情绪基线 → 触发映射 → 测试场景
 """
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import (
-    EmotionEngine, EmotionalState, Personality, Appraisal, Channel,
-    MemoryStore, SensitizationStore, FAST_CHANNELS
+    EmotionEngine, EmotionalState, Personality, Appraisal, MemoryStore, SensitizationStore
 )
 
 kokomi_name = "珊瑚宫心海"
@@ -133,7 +133,6 @@ def create_kokomi():
 # ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import time
 
     kokomi = create_kokomi()
 
