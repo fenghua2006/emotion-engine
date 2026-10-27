@@ -1,17 +1,19 @@
-"""L7 多角色情绪感染 v0：把 A 的 Appraisal 变成 B 的有界输入。
+"""L7 多角色情绪感染：把 A 的 Appraisal 变成 B 的有界输入。
 
 这一层不新增情绪公式，也不直接改任何角色状态。它只做三件事：
 
 1. 从源角色的 ``Appraisal`` 提取四个跨角色有意义的维度；
-2. 按增益 / 上限生成一个四维偏置；
+2. 按增益 / 关系强度 / 上限生成一个四维偏置；
 3. 通过 ``EmotionEngine.tick(contagion_bias=...)`` 交给目标角色，
    让目标角色仍用自己的 ``Personality``、trust/love、耐受窗和伤疤计算。
 
-设计边界：
+版本边界：
 
+- v0 只做单向 A → B；v0.1 增加 ``tick_bidirectional()``，两个方向的
+  偏置都在任何 tick 之前从输入 appraisal 求出，因此没有同 tick 反馈环。
 - 只传 ``goal_conduciveness / expectedness / coping_potential /
   social_evaluation``。``goal_relevance`` 是 A 自己的目标，``other_agency``
-  跨角色后语义不稳定，v0 不直接搬运。
+  跨角色后语义不稳定，不直接搬运。
 - 偏置默认单维 ±0.08、绝对上限 ±0.2，避免多角色场景把目标角色的
   Appraisal 推离合法范围。
 - ``ContagionPair`` 只编排两次 ``tick()``；它不导入 ``engine.py``，
@@ -53,6 +55,7 @@ _CONTAGION_SCALE: Dict[str, float] = {
 
 DEFAULT_CONTAGION_GAIN = 0.2
 DEFAULT_CONTAGION_CAP = 0.08
+DEFAULT_CONTAGION_STRENGTH = 1.0
 MAX_CONTAGION_CAP = 0.2
 
 _EPSILON = 1e-12
@@ -80,6 +83,13 @@ def _normalized_cap(cap: Any) -> float:
     if number is None:
         return DEFAULT_CONTAGION_CAP
     return max(0.0, min(MAX_CONTAGION_CAP, number))
+
+
+def _normalized_strength(strength: Any) -> float:
+    number = _finite_float(strength)
+    if number is None:
+        return DEFAULT_CONTAGION_STRENGTH
+    return max(0.0, min(1.0, number))
 
 
 def derive_contagion_bias(source_appraisal: Any, *,
@@ -143,15 +153,20 @@ _ISOLATED_ATTRIBUTES = ("state", "memory", "scars", "tolerance")
 
 
 class ContagionPair:
-    """A → B 的单向情绪感染编排器。
+    """A → B 的单向情绪感染编排器，并支持可选的 A ↔ B 双向模式。
 
     ``tick_pair()`` 先 tick 源角色，再用源角色本轮的**输入 Appraisal**
     生成偏置并 tick 目标角色。源角色的 L4 记忆先验不会隐式传给目标。
+
+    ``strength`` 是关系强度，乘在 ``gain`` 上：``effective_gain =
+    gain * strength``。它同时缩放单向与双向模式；``strength=0`` 等价于
+    关闭感染。调用方可传入 ``(trust + love) / 2`` 之类的角色关系强度。
     """
 
     def __init__(self, source: Any, target: Any, *,
                  gain: float = DEFAULT_CONTAGION_GAIN,
-                 cap: float = DEFAULT_CONTAGION_CAP) -> None:
+                 cap: float = DEFAULT_CONTAGION_CAP,
+                 strength: float = DEFAULT_CONTAGION_STRENGTH) -> None:
         if source is target:
             raise ValueError("contagion source and target must be different engines")
         if not callable(getattr(source, "tick", None)):
@@ -171,11 +186,39 @@ class ContagionPair:
         self.target = target
         self.gain = _normalized_gain(gain)
         self.cap = _normalized_cap(cap)
+        self.strength = _normalized_strength(strength)
+
+    @property
+    def effective_gain(self) -> float:
+        """关系强度缩放后的实际增益。"""
+        return _normalized_gain(self.gain * self.strength)
 
     def derive(self, source_appraisal: Any) -> Dict[str, float]:
-        """按本 pair 的增益 / 上限生成偏置。"""
+        """按本 pair 的增益 / 关系强度 / 上限生成偏置。"""
         return derive_contagion_bias(
-            source_appraisal, gain=self.gain, cap=self.cap,
+            source_appraisal, gain=self.effective_gain, cap=self.cap,
+        )
+
+    @staticmethod
+    def _tick_engine(engine: Any, appraisal: Any, *,
+                     contagion_bias: Optional[Dict[str, float]],
+                     boundary_violation: bool,
+                     now: Optional[float],
+                     trace: bool,
+                     appraisal_bias: Optional[Dict[str, float]]
+                     ) -> Dict:
+        tick_kwargs: Dict[str, Any] = {}
+        if appraisal_bias:
+            tick_kwargs["appraisal_bias"] = appraisal_bias
+        if contagion_bias:
+            tick_kwargs["contagion_bias"] = contagion_bias
+
+        return engine.tick(
+            appraisal,
+            boundary_violation=boundary_violation,
+            now=now,
+            trace=trace,
+            **tick_kwargs,
         )
 
     def tick_target(self, target_appraisal: Any = None,
@@ -190,18 +233,14 @@ class ContagionPair:
         if target_appraisal is not None and source_appraisal is not None:
             bias = self.derive(source_appraisal)
 
-        tick_kwargs: Dict[str, Any] = {}
-        if appraisal_bias:
-            tick_kwargs["appraisal_bias"] = appraisal_bias
-        if bias:
-            tick_kwargs["contagion_bias"] = bias
-
-        return self.target.tick(
+        return self._tick_engine(
+            self.target,
             target_appraisal,
+            contagion_bias=bias,
             boundary_violation=boundary_violation,
             now=now,
             trace=trace,
-            **tick_kwargs,
+            appraisal_bias=appraisal_bias,
         )
 
     def tick_pair(self, source_appraisal: Any = None,
@@ -213,20 +252,58 @@ class ContagionPair:
                   now: Optional[float] = None,
                   trace: bool = False) -> Tuple[Dict, Dict]:
         """先 tick 源，再 tick 目标；返回 ``(source_result, target_result)``。"""
-        source_kwargs: Dict[str, Any] = {}
-        if source_appraisal_bias:
-            source_kwargs["appraisal_bias"] = source_appraisal_bias
-
-        source_result = self.source.tick(
+        source_result = self._tick_engine(
+            self.source,
             source_appraisal,
+            contagion_bias=None,
             boundary_violation=source_boundary_violation,
             now=now,
             trace=trace,
-            **source_kwargs,
+            appraisal_bias=source_appraisal_bias,
         )
         target_result = self.tick_target(
             target_appraisal,
             source_appraisal,
+            boundary_violation=target_boundary_violation,
+            now=now,
+            trace=trace,
+            appraisal_bias=target_appraisal_bias,
+        )
+        return source_result, target_result
+
+    def tick_bidirectional(self, source_appraisal: Any = None,
+                           target_appraisal: Any = None, *,
+                           source_boundary_violation: bool = False,
+                           target_boundary_violation: bool = False,
+                           source_appraisal_bias: Optional[Dict[str, float]] = None,
+                           target_appraisal_bias: Optional[Dict[str, float]] = None,
+                           now: Optional[float] = None,
+                           trace: bool = False) -> Tuple[Dict, Dict]:
+        """双向 tick：A ↔ B，各自从对方本轮的输入 appraisal 获得偏置。
+
+        两个偏置都在任何 tick 之前计算，因此结果与 tick 顺序无关，也不会
+        在同一 tick 内形成反馈回路。缺少任一方的 appraisal 时，两个方向
+        都不计算偏置，退化为两次普通 tick。
+        """
+        source_bias: Dict[str, float] = {}
+        target_bias: Dict[str, float] = {}
+        if source_appraisal is not None and target_appraisal is not None:
+            source_bias = self.derive(target_appraisal)
+            target_bias = self.derive(source_appraisal)
+
+        source_result = self._tick_engine(
+            self.source,
+            source_appraisal,
+            contagion_bias=source_bias,
+            boundary_violation=source_boundary_violation,
+            now=now,
+            trace=trace,
+            appraisal_bias=source_appraisal_bias,
+        )
+        target_result = self._tick_engine(
+            self.target,
+            target_appraisal,
+            contagion_bias=target_bias,
             boundary_violation=target_boundary_violation,
             now=now,
             trace=trace,
@@ -240,6 +317,7 @@ __all__ = [
     "CONTAGION_NEUTRAL",
     "DEFAULT_CONTAGION_CAP",
     "DEFAULT_CONTAGION_GAIN",
+    "DEFAULT_CONTAGION_STRENGTH",
     "MAX_CONTAGION_CAP",
     "ContagionPair",
     "derive_contagion_bias",

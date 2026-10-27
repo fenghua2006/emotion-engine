@@ -1,18 +1,23 @@
-# L7 v0：多角色情绪感染
+# L7：多角色情绪感染（v0 + v0.1 双向）
 
 > 目标：让 A 的 `Appraisal` 成为 B 的有界输入，而不是让两个角色共享同一份情绪状态。
 >
-> 代码：`contagion.py` · 测试：`test_l7_contagion.py` + `test_l7_integration.py` · 演示：`python scripts/multi_character_demo.py`
+> 代码：`contagion.py` · 测试：`test_l7_contagion.py` + `test_l7_integration.py` + `test_l7_1_bidirectional.py` · 演示：`python scripts/multi_character_demo.py`
 
 L7 v0 是**单向**感染：A 的事件评估 → B 的 appraisal 先验。B 仍使用自己的
-`Personality`、trust / love、耐受窗、伤疤和氛围计算情绪。双向同时感染、
-群体传播与角色关系图不在 v0 范围内。
+`Personality`、trust / love、耐受窗、伤疤和氛围计算情绪。
+
+L7.1 增加**双向**感染与**关系强度**：`tick_bidirectional()` 在 tick 前分别
+从 A、B 本轮的输入 appraisal 求出两个方向的偏置，再各自 tick；`strength`
+乘在 `gain` 上，可作为角色关系强度。群体传播与角色关系图仍不在范围内。
 
 ---
 
 ## 1. 设计边界
 
 ```text
+单向 A → B
+
 A 的 event Appraisal
         │
         ▼
@@ -23,7 +28,18 @@ B 的 tick(contagion_bias=...)
         │  L4 记忆先验之后、appraise() 之前
         ▼
 B 的 appraise → gate → tolerance → scar → atmosphere → state
+
+双向 A ↔ B（L7.1）
+
+A 的输入 Appraisal ──derive──▶ A ← B 偏置 ┐
+B 的输入 Appraisal ──derive──▶ B ← A 偏置 ┤
+                                           ├─ 两个偏置都算完后才 tick
+A 的 tick(contagion_bias=B→A) ◀────────────┘
+B 的 tick(contagion_bias=A→B)
 ```
+
+双向模式的关键：两个偏置都来自**本轮的输入 appraisal**，不在 tick 之间
+互相读取输出，因此不会形成同一 tick 内的反馈环，也不依赖先 tick 谁。
 
 硬约束：
 
@@ -31,7 +47,8 @@ B 的 appraise → gate → tolerance → scar → atmosphere → state
 - 不写记忆；不存整段聊天；不改变 `(character_id, user_id)` 隔离。
 - 源和目标不得共享 `state` / `memory` / `scars` / `tolerance`；共享只读
   `Personality` 允许。
-- 默认路径（不传 `contagion_bias`）的 result、trace 键集合与六套 golden 不变。
+- 默认路径（不传 `contagion_bias` / 不用双向）的 result、trace 键集合与六套
+  golden 不变。
 - 感染不进入快照、MCP 工具或 dashboard；它是每 tick 的输入，不是持久状态。
 
 ## 2. 传输哪四维
@@ -114,21 +131,40 @@ love / trust 生长仍看原始 appraisal**。这是保留 tick 顺序契约的�
 ```python
 from contagion import ContagionPair
 
-pair = ContagionPair(engine_a, engine_b)  # 单向 A → B
+pair = ContagionPair(
+    engine_a, engine_b,
+    strength=0.7,          # 关系强度：effective_gain = gain * strength
+)
 
+# 单向 A → B
 a_result, b_result = pair.tick_pair(
     source_appraisal=a_appraisal,
     target_appraisal=b_appraisal,
     now=now,
 )
 print(b_result["contagion_bias"])
+
+# 双向 A ↔ B（L7.1）
+a_result, b_result = pair.tick_bidirectional(
+    source_appraisal=a_appraisal,
+    target_appraisal=b_appraisal,
+    now=now,
+)
+print(a_result["contagion_bias"])  # B → A
+print(b_result["contagion_bias"])  # A → B
 ```
 
 - `tick_pair()`：先 tick A，再 tick B；同一时钟，A 先 B 后。
+- `tick_bidirectional()`：先从 A、B 的**输入 appraisal** 分别算出 B → A 与
+  A → B 的偏置，再 tick A、B；结果与 tick 顺序无关，也没有同 tick 反馈环。
 - A 传给 B 的是 **A 本轮的输入 appraisal**，不是 A 的最终通道状态；
-  A 的 L4 记忆先验不会隐式转给 B。
+  A 的 L4 记忆先验不会隐式转给 B。双向模式同理。
 - `tick_target()`：只 tick B；有 `source_appraisal` 时叠加感染。
-- `source_appraisal` 或 `target_appraisal` 缺失时，行为与普通 `tick()` 一致。
+- `source_appraisal` 或 `target_appraisal` 缺失时，行为与普通 `tick()` 一致；
+  双向模式下任一缺失会关闭两个方向。
+- `strength` 限制在 `[0, 1]`，默认 `1.0`；`strength=0` 等价于关闭感染。
+  它是全局关系强度，不是从 trust / love 自动推导；调用方可传
+  `(trust + love) / 2` 之类的值。
 - 构造时拒绝同一 engine，以及共享 `state` / `memory` / `scars` /
   `tolerance` 的两个 engine。
 
@@ -150,21 +186,25 @@ LLM 仍然只写 `utterance`，不写回通道或人格。
 ```bash
 python scripts/multi_character_demo.py
 python scripts/multi_character_demo.py --gain 0.3 --cap 0.1
+python scripts/multi_character_demo.py --bidirectional --strength 0.5
 ```
 
 演示创建 A（高外向 / 高神经质）与 B（内向 / 高宜人），让 A 经历负面事件、
-B 只做旁观评估，对比 B 在有 / 无感染下的 joy / sadness / fear / trust。
+B 只做旁观评估。默认对比 B 在有 / 无单向感染下的 joy / sadness / fear /
+trust；`--bidirectional` 同时对比 A 和 B 的双向变化，`--strength` 缩放
+关系强度。
 
 ## 7. 测试
 
 ```bash
-python -m unittest test_l7_contagion.py test_l7_integration.py -v
+python -m unittest test_l7_contagion.py test_l7_integration.py \
+  test_l7_1_bidirectional.py -v
 ```
 
 覆盖：
 
 - 四维常量、中性值、正负方向和默认上限；
-- 自定义 gain / cap、非法输入清洗、NaN / Inf 防护；
+- 自定义 gain / cap / strength、非法输入清洗、NaN / Inf 防护；
 - 同一 engine / 共享可变子结构的拒绝；
 - 共享 `Personality` 不被修改；
 - 中性源与普通 tick 逐值一致；
@@ -172,22 +212,27 @@ python -m unittest test_l7_contagion.py test_l7_integration.py -v
 - 无 appraisal 时 no-op；
 - `respond()` / `respond_llm()` 透传与本地回退；
 - `tick_pair()` 让 B 变化但不影响 A；
+- 双向两个方向都生效、镜像对称、顺序无关、单侧中性 / 缺失 appraisal；
+- 双向的 L4 记忆先验、边界标志、trace 三键与 `tick_pair()` 单向回归；
 - 快照 / 记忆 schema 版本不变，感染不额外写记忆。
 
-当前：`test_l7_contagion.py` 14 个，`test_l7_integration.py` 13 个；
-全量 365 tests OK；ruff clean；coverage 87%（branch，gate 80）；六套 golden 无 diff。
+当前：`test_l7_contagion.py` 14 个，`test_l7_integration.py` 13 个，
+`test_l7_1_bidirectional.py` 14 个，共 41 个 L7 测试；全量 379 tests OK；
+ruff clean；coverage 87%（branch，gate 80）；六套 golden 无 diff。
 
 ## 8. 限制与下一步
 
-- **单向**：v0 不做双向反馈回路；需要时由调用方组合两个 `ContagionPair`
-  并明确顺序。
+- **双向是输入级对称**：L7.1 的 `tick_bidirectional()` 支持同一 tick 内
+  A ↔ B，但每个方向只读对方本轮的输入 appraisal，不读取对方刚更新的情绪
+  输出；跨轮反馈回路仍由调用方控制。
 - **无相关性门控**：`goal_relevance` 不参与传输；低相关事件也可能带来
   小幅感染。后续可用 B 自己的 relevance 或角色间关系强度做门控。
-- **无角色关系强度**：v0 的 gain / cap 是全局参数；后续可按信任、亲密、
-  依恋或角色配置逐对设置。
+- **关系强度是显式参数**：`strength` 是每个 pair 的全局乘数，不会从
+  trust / love / 历史自动推导；调用方可传 `(trust + love) / 2` 等值，
+  后续可做自动关系模型。
 - **感染源是输入 appraisal**：不是 A 的最终情绪；若需要“看到 A 的表情后
   被感染”，应由上游先构造 A 的表达 appraisal，再调用本模块。
-- **无群体传播**：多角色网络、传播链和衰减留给 L7.1+。
+- **无群体传播**：多角色网络、传播链和衰减留给后续。
 - **版本说明**：设计纲领中的 v0.8 曾指“记忆显式化”，而 ROADMAP 当前
-  v0.8 指多角色交互；本次按 ROADMAP 实现 L7 = v0.8 多角色 v0，不声称
-  完成设计纲领的全部 v0.8 记忆目标。
+  v0.8 指多角色交互；本次按 ROADMAP 实现 L7 = v0.8 多角色 v0 + v0.1，
+  不声称完成设计纲领的全部 v0.8 记忆目标。

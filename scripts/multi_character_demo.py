@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""L7 v0 demo：A 的 appraisal 如何有界地影响 B 的情绪。
+"""L7 demo：A 的 appraisal 如何有界地影响 B 的情绪。
+
+默认单向 A → B；加 ``--bidirectional`` 可看 A ↔ B 双向感染与关系强度。
 
 运行：
     python scripts/multi_character_demo.py
     python scripts/multi_character_demo.py --gain 0.3 --cap 0.1
+    python scripts/multi_character_demo.py --bidirectional --strength 0.5
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ if str(ROOT) not in sys.path:
 from contagion import (  # noqa: E402
     DEFAULT_CONTAGION_CAP,
     DEFAULT_CONTAGION_GAIN,
+    DEFAULT_CONTAGION_STRENGTH,
     ContagionPair,
 )
 from core import Appraisal, EmotionalState, Personality  # noqa: E402
@@ -66,6 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--cap", type=float, default=DEFAULT_CONTAGION_CAP,
         help=f"per-dimension cap (default {DEFAULT_CONTAGION_CAP})",
     )
+    parser.add_argument(
+        "--strength", type=float, default=DEFAULT_CONTAGION_STRENGTH,
+        help=f"relationship strength multiplier (default {DEFAULT_CONTAGION_STRENGTH})",
+    )
+    parser.add_argument(
+        "--bidirectional", action="store_true",
+        help="run A <-> B instead of one-way A -> B",
+    )
     return parser
 
 
@@ -87,7 +99,8 @@ def main() -> int:
     control = make_engine(target_personality)
     source_control = make_engine(source_personality)
     pair = ContagionPair(
-        source, target, gain=args.gain, cap=args.cap,
+        source, target,
+        gain=args.gain, cap=args.cap, strength=args.strength,
     )
 
     # A 被当众否定；B 只是旁观者，自己的评估没有 A 那么负面。
@@ -108,6 +121,50 @@ def main() -> int:
         social_evaluation=0.1,
     )
 
+    if args.bidirectional:
+        source_result, target_result = pair.tick_bidirectional(
+            source_event, target_event, now=NOW,
+        )
+        source_control_result = source_control.tick(source_event, now=NOW)
+        target_control_result = control.tick(target_event, now=NOW)
+
+        print("=== L7.1 bidirectional contagion ===")
+        print("A: 高外向 / 高神经质；B: 内向 / 高宜人")
+        print(
+            f"gain={pair.gain:.3f}  strength={pair.strength:.3f}  "
+            f"effective_gain={pair.effective_gain:.3f}  cap={pair.cap:.3f}"
+        )
+        print()
+        show_state("A alone (control)", source_control_result)
+        show_state("A after contagion", source_result)
+        show_state("B alone (control)", target_control_result)
+        show_state("B after contagion", target_result)
+        print()
+        print("A <- B bias:", source_result.get("contagion_bias", {}))
+        print("B <- A bias:", target_result.get("contagion_bias", {}))
+        print()
+        print(
+            "A gated joy/sadness:",
+            f"{source_result['gated_appraisal']['joy']:.3f} / "
+            f"{source_result['gated_appraisal']['sadness']:.3f}",
+        )
+        print(
+            "A control gated joy/sadness:",
+            f"{source_control_result['gated_appraisal']['joy']:.3f} / "
+            f"{source_control_result['gated_appraisal']['sadness']:.3f}",
+        )
+        print(
+            "B gated joy/sadness:",
+            f"{target_result['gated_appraisal']['joy']:.3f} / "
+            f"{target_result['gated_appraisal']['sadness']:.3f}",
+        )
+        print(
+            "B control gated joy/sadness:",
+            f"{target_control_result['gated_appraisal']['joy']:.3f} / "
+            f"{target_control_result['gated_appraisal']['sadness']:.3f}",
+        )
+        return 0
+
     source_result, target_result = pair.tick_pair(
         source_event, target_event, now=NOW,
     )
@@ -116,7 +173,10 @@ def main() -> int:
 
     print("=== L7 multi-character contagion ===")
     print("A: 高外向 / 高神经质；B: 内向 / 高宜人")
-    print(f"gain={pair.gain:.3f}  cap={pair.cap:.3f}")
+    print(
+        f"gain={pair.gain:.3f}  strength={pair.strength:.3f}  "
+        f"effective_gain={pair.effective_gain:.3f}  cap={pair.cap:.3f}"
+    )
     print()
     show_state("A after event", source_result)
     show_state("B alone (control)", control_result)

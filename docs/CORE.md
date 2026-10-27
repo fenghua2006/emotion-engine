@@ -155,13 +155,14 @@ python -m unittest test_core_line.py test_tolerance.py \
   test_l1_fast_channels.py test_interaction_activation.py \
   test_l2_slow_channels.py test_l3_atmosphere_scars.py \
   test_l3_5_meta_emotion.py test_l5_tolerance.py \
-  test_l7_contagion.py test_l7_integration.py -v
-# 上述回归 312 tests, OK；全量 365 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6、27 个 L7 测试）
+  test_l7_contagion.py test_l7_integration.py \
+  test_l7_1_bidirectional.py -v
+# 上述回归 326 tests, OK；全量 379 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6、41 个 L7 测试）
 ```
 
 L6 的 `jev.py` / `noul.py` 只在显式开启时生成输入；L7 的 `contagion.py`
-只在传入 `contagion_bias` / 使用 `ContagionPair` 时生效。默认路径不改变本文件
-任何公式或 golden。
+只在传入 `contagion_bias` / 使用 `ContagionPair`（含 L7.1 双向模式）时生效。
+默认路径不改变本文件任何公式或 golden。
 
 另外验证了：
 

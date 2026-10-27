@@ -434,4 +434,4 @@ python -m unittest test_l4_memory_integration.py -v
 - `test_memory_system.py`：19
 - `test_l4_memory_integration.py`：27
 - L6 记忆相关：`test_l6_mcp.py` 的 `recall` / `state` 工具测试
-- 全套：365 tests OK（L7 后）
+- 全套：379 tests OK（L7.1 后）
