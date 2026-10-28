@@ -421,7 +421,7 @@ python -m unittest test_l7_contagion.py test_l7_integration.py \
 当前：`test_l7_contagion.py` 14 个，`test_l7_integration.py` 13 个，
 `test_l7_1_bidirectional.py` 14 个，`test_l7_2_relationship_model.py` 14 个，
 `test_l7_3_network.py` 22 个，`test_l7_4_directional.py` 21 个，
-`test_contagion_dashboard.py` 13 个，共 111 个 L7 测试；L8.5 后全量 513 tests OK；
+`test_contagion_dashboard.py` 13 个，共 111 个 L7 测试；L8.5 与可选场景 LLM 后全量 523 tests OK；
 ruff clean；coverage 88%（branch，gate 80）；六套 golden 无 diff。
 
 ## 8. 限制与下一步

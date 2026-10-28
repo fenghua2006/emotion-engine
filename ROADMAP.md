@@ -206,6 +206,7 @@
   不改角色间关系
 - 场景引擎状态不持久化，只持久化关系；不写 `Personality`，六套 golden 不变
 - 28 个 L8 测试（15 库内 + 13 仪表盘）；全量 483 tests OK；ruff clean
+  （后续可选场景 LLM 表达追加 10 个，L8 合计 38；全量 523）
 - 网页实验台：`python dashboard/server.py` → `http://localhost:9020/scene`；
   2–4 角色、连续对话、关系表、感染边、逐回合结算
 - 详细设计见 `docs/L8_SOCIAL_SCENE.md`
@@ -219,12 +220,16 @@
   合成 urgency；固定门控顺序；只读 assess 与发送后 mark_contact
 - `FriendScene` 集成：`record_turn()` 观察活动，`snapshot()` 增加 `proactive`
 - `/scene` 新增主动联系卡片：检查意愿、自动 / 指定角色发送、候选原因表；
-  发送走一次普通场景回合，不重复 tick，不调用 LLM
+  发送走一次普通场景回合，不重复 tick；调度器本身不调用 LLM，场景开启
+  `llm.enabled` 时复用的回合由 LLM 写台词
 - `POST /api/scene/proactive`：check / send；支持 `now` 回放与 `actor_id`
-- 17 个核心 + 13 个仪表盘 tests（30）；全量 513 tests OK；ruff clean；
+- 可选场景 LLM 表达（默认关闭）：`/scene` 大模型卡片；开启后每角色仍只 tick
+  一次，LLM 只替换台词；失败回退本地模板；密钥仅进程内存，状态 / 响应 /
+  日志只暴露 `has_api_key` / `has_fallback_key`；LLM 设置不进入场景签名
+- 17 个核心 + 13 个仪表盘 tests（30）；全量 523 tests OK；ruff clean；
   coverage 88%（branch）；六套 golden 无 diff
 - 详细设计见 `docs/L8_5_PROACTIVE_CONTACT.md`
-- 仍未做：调度状态持久化、后台定时自动发送、LLM 主动台词、逐条已读
+- 仍未做：调度状态持久化、后台定时自动发送、流式 / 并发 LLM 台词、逐条已读
 
 ## v0.9 — 角色市场
 - 社区贡献蒸馏配方

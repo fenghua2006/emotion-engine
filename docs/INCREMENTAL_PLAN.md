@@ -21,7 +21,7 @@
 | **L6** | 表达 / LLM / JEV / MCP | ✅ 2026-10-27（v0） | 规则优先 + LLM 可选回退；Noul 边界信号；MCP stdio；338 tests |
 | **L7** | 多角色情绪感染 | ✅ 2026-10-27（v0 + v0.1 + v0.2 + v0.3 + v0.4） | 单向 / 双向 / 群体网络；四维有界先验；显式 / 自动 / 方向性关系强度；网页实验台；默认路径零变化；455 tests |
 | **L8** | 朋友圈场景 | ✅ 2026-10-28（v0） | 有向关系持久化；关系强度推导感染边；回合后关系结算；`/scene` 网页实验台；默认路径零变化；483 tests |
-| **L8.5** | 主动联系 / 调度 | ✅ 2026-10-28（v0） | 引擎外意愿评估；静默 / 冷却 / 每日 / 未回复 / 安静时段门控；发送走普通场景回合；30 tests；513 total |
+| **L8.5** | 主动联系 / 调度 | ✅ 2026-10-28（v0 + 可选场景 LLM） | 引擎外意愿评估；静默 / 冷却 / 每日 / 未回复 / 安静时段门控；发送走普通场景回合；30 tests；523 total |
 
 ## L0：核心情绪线 ✅
 
@@ -596,7 +596,7 @@ demo：单向 B 四维 bias -0.08；双向 A/B 各自获得对方偏置；
 ```text
 15 个库内 L8 tests + 13 个网页实验台服务端 tests
 = 28 个 L8 tests, OK
-483 tests total, OK
+483 tests total, OK（后续可选场景 LLM 表达追加 10 个 tests，L8 合计 38；全量 523）
 ruff check . -> All checks passed
 coverage report -> 88% total（branch，gate 80）
 L1/L2/L5 六套 golden 无 diff
@@ -656,7 +656,7 @@ L1/L2/L5 六套 golden 无 diff
 ```text
 17 个核心 L8.5 tests + 13 个主动联系仪表盘 tests
 = 30 个 L8.5 tests, OK
-513 tests total, OK
+523 tests total, OK（含 10 个可选场景 LLM tests）
 ruff check . -> All checks passed
 coverage report -> 88% total（branch，gate 80）
 L1/L2/L5 六套 golden 无 diff

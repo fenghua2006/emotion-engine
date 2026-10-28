@@ -57,7 +57,7 @@
   button.primary:hover:not(:disabled) { filter: brightness(1.15); }
   button.ghost { background: transparent; }
   button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
-  select, input[type="number"], input[type="text"], textarea {
+  select, input[type="number"], input[type="text"], input[type="password"], textarea {
     background: #0f1621;
     color: var(--text);
     border: 1px solid var(--line);
@@ -405,6 +405,52 @@
             </label>
           </div>
         </div>
+        <div>
+          <h2 style="margin-top:4px">大模型表达</h2>
+          <label class="check-row" style="margin-top:0">
+            <input id="llm-enabled" type="checkbox">
+            启用 LLM 台词（失败自动回退本地模板）
+          </label>
+          <div class="grid-2">
+            <label class="field">主 API Key
+              <input id="llm-api-key" type="password" autocomplete="off" placeholder="留空 = 保持 / 环境变量">
+            </label>
+            <label class="field">模型
+              <input id="llm-model" type="text" maxlength="120" value="deepseek-chat">
+            </label>
+          </div>
+          <label class="field">Base URL
+            <input id="llm-base-url" type="text" maxlength="500" value="https://api.deepseek.com/v1">
+          </label>
+          <div class="grid-2">
+            <label class="field">Fallback Key（可选）
+              <input id="llm-fallback-key" type="password" autocomplete="off" placeholder="留空 = 不启用">
+            </label>
+            <label class="field">Fallback 模型
+              <input id="llm-fallback-model" type="text" maxlength="120" value="moonshot-v1-8k">
+            </label>
+          </div>
+          <label class="field">Fallback URL
+            <input id="llm-fallback-url" type="text" maxlength="500" value="https://api.moonshot.cn/v1">
+          </label>
+          <label class="check-row">
+            <input id="llm-use-character-key" type="checkbox" checked>
+            全局 Key 为空时使用自定义角色自己的 Key
+          </label>
+          <div class="grid-2">
+            <label class="check-row">
+              <input id="llm-clear-key" type="checkbox">
+              清除已保存主 Key
+            </label>
+            <label class="check-row">
+              <input id="llm-clear-fallback-key" type="checkbox">
+              清除 Fallback Key
+            </label>
+          </div>
+          <div class="hint" id="llm-key-state">
+            Key 只保存在服务端内存，不写入场景快照或响应。
+          </div>
+        </div>
         <label class="check-row">
           <input id="reset-relationships" type="checkbox">
           重建时同时清空本世界的角色关系
@@ -703,7 +749,28 @@
       max_hops: Number($("max-hops").value),
       actors,
       proactive: readProactiveConfig(),
+      llm: readLLMConfig(),
     };
+  }
+
+  function readLLMConfig() {
+    const current = (ui.state && ui.state.config && ui.state.config.llm) || {};
+    const apiKey = $("llm-api-key").value.trim();
+    const fallbackKey = $("llm-fallback-key").value.trim();
+    const config = Object.assign({}, current, {
+      enabled: $("llm-enabled").checked,
+      base_url: $("llm-base-url").value.trim() || "https://api.deepseek.com/v1",
+      model: $("llm-model").value.trim() || "deepseek-chat",
+      fallback_url: $("llm-fallback-url").value.trim() || "https://api.moonshot.cn/v1",
+      fallback_model: $("llm-fallback-model").value.trim() || "moonshot-v1-8k",
+      use_character_key: $("llm-use-character-key").checked,
+      clear_api_key: $("llm-clear-key").checked,
+      clear_fallback_key: $("llm-clear-fallback-key").checked,
+    });
+    // 密钥输入框每次只提交新值；空值由服务端决定“保持”或“清除”。
+    if (apiKey) config.api_key = apiKey;
+    if (fallbackKey) config.fallback_key = fallbackKey;
+    return config;
   }
 
   function numericValue(id, fallback) {
@@ -746,6 +813,30 @@
     $("proactive-quiet-end").value = hours(proactive.quiet_end_hour);
   }
 
+  function fillLLMConfig(config) {
+    const llm = (config && config.llm) || {};
+    $("llm-enabled").checked = !!llm.enabled;
+    $("llm-base-url").value = llm.base_url || "https://api.deepseek.com/v1";
+    $("llm-model").value = llm.model || "deepseek-chat";
+    $("llm-fallback-url").value = llm.fallback_url || "https://api.moonshot.cn/v1";
+    $("llm-fallback-model").value = llm.fallback_model || "moonshot-v1-8k";
+    $("llm-use-character-key").checked = llm.use_character_key !== false;
+    $("llm-api-key").value = "";
+    $("llm-fallback-key").value = "";
+    $("llm-api-key").placeholder = llm.has_api_key
+      ? "已保存 · 留空保持"
+      : "未保存 · 留空用环境变量";
+    $("llm-fallback-key").placeholder = llm.has_fallback_key
+      ? "已保存 · 留空保持"
+      : "留空 = 不启用";
+    $("llm-clear-key").checked = false;
+    $("llm-clear-fallback-key").checked = false;
+    $("llm-key-state").textContent =
+      `主 Key ${llm.has_api_key ? "已保存" : "未保存"} · ` +
+      `Fallback ${llm.has_fallback_key ? "已保存" : "未保存"} · ` +
+      "仅保存在服务端内存";
+  }
+
   function fillConfig(config) {
     if (!config) return;
     $("world-id").value = config.world_id || "dashboard";
@@ -755,6 +846,7 @@
     $("max-hops").value = config.max_hops;
     renderActorRows(config.actors);
     fillProactiveConfig(config);
+    fillLLMConfig(config);
   }
 
   function renderSpeakerSelect() {
@@ -834,6 +926,14 @@
         const llm = document.createElement("span");
         llm.className = "meta-chip hot";
         llm.textContent = "建议 LLM";
+        meta.appendChild(llm);
+      }
+      if ("llm_used" in actor) {
+        const llm = document.createElement("span");
+        llm.className = `meta-chip${actor.llm_used ? "" : " hot"}`;
+        llm.textContent = actor.llm_used
+          ? `LLM${actor.llm_backend ? " · " + actor.llm_backend : ""}`
+          : "本地回退";
         meta.appendChild(llm);
       }
       if (actor.action) {
@@ -1332,7 +1432,14 @@
       applyTurnPayload(payload);
       $("text").value = "";
       updateCount();
-      setStatus(`第 ${payload.turn} 回合完成`, "ok");
+      const fallbacks = Object.values(payload.actors || {})
+        .filter((actor) => "llm_used" in actor && !actor.llm_used).length;
+      setStatus(
+        fallbacks
+          ? `第 ${payload.turn} 回合完成 · ${fallbacks} 个角色回退本地模板`
+          : `第 ${payload.turn} 回合完成`,
+        "ok",
+      );
     } catch (error) {
       setStatus(`发送失败：${error.message}`, "error");
     } finally {
@@ -1389,6 +1496,9 @@
       "proactive-threshold", "proactive-min-silence", "proactive-window",
       "proactive-cooldown", "proactive-daily", "proactive-unanswered",
       "proactive-quiet-start", "proactive-quiet-end",
+      "llm-enabled", "llm-api-key", "llm-base-url", "llm-model",
+      "llm-fallback-key", "llm-fallback-url", "llm-fallback-model",
+      "llm-use-character-key", "llm-clear-key", "llm-clear-fallback-key",
     ].forEach((id) => {
       $(id).addEventListener("input", markDirty);
       $(id).addEventListener("change", markDirty);

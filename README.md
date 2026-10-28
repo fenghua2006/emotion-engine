@@ -42,7 +42,7 @@ Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时�
 
 `tolerance.py` 不新增情绪通道，而是在每次 tick 后读取状态，决定下一 tick 是调节态、过度唤醒还是低唤醒。L5 默认把容量拆成愤怒 / 恐惧 / 亲密 / 批评四域，再取加权有效容量。
 
-底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；L7 增加多角色情绪感染（`contagion.py`，单向 + 双向 + 显式 / 自动关系强度 + 群体传播 + 方向性关系）；L8 增加朋友圈场景（`social.py`，有向关系持久化 + 场景回合编排）；L8.5 增加主动联系调度（`proactive.py`，只读意愿评估 + 独立冷却 / 上限）。这些入口默认关闭，不改变默认曲线。
+底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；L7 增加多角色情绪感染（`contagion.py`，单向 + 双向 + 显式 / 自动关系强度 + 群体传播 + 方向性关系）；L8 增加朋友圈场景（`social.py`，有向关系持久化 + 场景回合编排）与可选 LLM 台词（默认关闭，失败回退本地模板）；L8.5 增加主动联系调度（`proactive.py`，只读意愿评估 + 独立冷却 / 上限）。这些入口默认关闭，不改变默认曲线。
 
 ## 快速开始
 
@@ -142,7 +142,7 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L8.5 后全量 513 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；场景 LLM 表达后全量 523 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - P0 可维护性：`tick()` 拆成有序 `_step_*`、表达层 / LLM 客户端分层、ruff + coverage + CI、快照 / 记忆 schema 版本与迁移点；见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 - L0–L8 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
@@ -158,7 +158,7 @@ trace = result["trace"]
   L3.5 完成后 191 tests，L5 校准核心完成后 229 tests，L5.1 表达/仪表盘后 241 tests，
   L4 记忆接入后 285 tests，L6 JEV / Noul / MCP 后 338 tests，
   L7 情绪感染与网页实验台后 455 tests，L8 朋友圈场景后 483 tests，
-  L8.5 主动联系后 **513 tests, OK**。
+  L8.5 主动联系后 513 tests，可选场景 LLM 表达后 **523 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -241,7 +241,7 @@ print(result["trace"]["meta_emotions"])
   `tolerance_load_bias` 作为有界附加负荷（≤0.2）进入 tolerance；默认关闭。
 - 同一 anger 的两种二阶态度：
   `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
-- 25 个 L3.5 测试；L8.5 后全量 **513 tests, OK**。
+- 25 个 L3.5 测试；可选场景 LLM 表达后全量 **523 tests, OK**。
 - 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
@@ -414,7 +414,7 @@ results = network.tick({"A": a_appraisal}, now=now)
   `python scripts/contagion_network_demo.py`。
 - 详细设计、边界与后续计划：[`docs/L7_MULTI_CHARACTER.md`](docs/L7_MULTI_CHARACTER.md)。
 
-## L8 朋友圈场景（v0 + 网页实验台）
+## L8 朋友圈场景（v0 + 网页实验台 + 可选 LLM 表达）
 
 L8 把 L7 的感染能力接成可连续对话的朋友圈：每个角色仍是隔离引擎，
 角色之间维护**有向关系**，关系强度决定感染边，回合结束后按听者的
@@ -455,8 +455,13 @@ turn = scene.record_turn("A", {"A": appraisal_a, "B": appraisal_b})
 - 场景引擎的情绪状态**不持久化**；重启后关系保留，情绪回到构造时状态。
 - 网页：`python dashboard/server.py` → `http://localhost:9020/scene`；
   可选 2–4 个角色、编辑世界 ID 与感染参数、连续对话并查看关系表。
-- 测试：`python -m unittest test_l8_scene.py test_scene_dashboard.py -v`
-  （15 + 13，共 28）。
+- **可选 LLM 表达（默认关闭）**：`llm.enabled=true` 时每个角色仍由本地
+  `respond()` 先 tick，再由 `respond_llm()` 用 DeepSeek / Kimi 替换台词；
+  `appraisal` / 感染偏置 / 边界原样传入，失败回退本地模板。密钥只存服务端
+  内存，状态 / 响应 / 日志只暴露 `has_api_key` / `has_fallback_key`。
+  默认关闭时不改变调用链、返回键集合或六套 golden。
+- 测试：`python -m unittest test_l8_scene.py test_scene_dashboard.py test_scene_llm.py -v`
+  （15 + 13 + 10，共 38）。
 - 详细设计、API 与已知限制：[`docs/L8_SOCIAL_SCENE.md`](docs/L8_SOCIAL_SCENE.md)。
 
 ## L8.5 主动联系（v0）
@@ -483,10 +488,11 @@ if candidate is not None:
 - 门控顺序：安静时段 → 最小静默 → 冷却 → 每日上限 → 未回复上限 → 阈值。
 - 用户发言清空所有角色的未回复计数；角色发言只更新活动时间。
 - `FriendScene.snapshot()` 新增 `proactive`；`record_turn()` 自动观察回合。
-- 网页 `/scene` 新增检查 / 发送按钮、候选表与主动联系参数；发送由模板台词
-  驱动，不调用 LLM，不额外 tick。
+- 网页 `/scene` 新增检查 / 发送按钮、候选表与主动联系参数；调度器本身不调用
+  LLM，发送复用普通场景回合；若场景开启 `llm.enabled`，台词会走 LLM，
+  失败回退模板。发送不额外 tick。
 - 测试：`python -m unittest test_l85_proactive.py test_proactive_dashboard.py -v`
-  （17 + 13，共 30）；L8.5 后全量 **513 tests, OK**。
+  （17 + 13，共 30）；可选场景 LLM 表达后全量 **523 tests, OK**。
 - 详细设计、API 与限制：[`docs/L8_5_PROACTIVE_CONTACT.md`](docs/L8_5_PROACTIVE_CONTACT.md)。
 
 ## 10 通道

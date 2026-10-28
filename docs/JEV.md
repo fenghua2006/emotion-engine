@@ -157,7 +157,7 @@ local = respond_llm(engine, text, auto_boundary=True, boundary_violation=False)
 test_l6_jev.py                22 tests
 test_l6_integration.py        15 tests（Noul + respond 集成）
 test_l6_mcp.py                16 tests（含 stdio）
-全量                          513 tests OK（L8.5 主动联系后）
+全量                          523 tests OK（含可选场景 LLM 表达）
 ruff check .                  All checks passed
 L1/L2/L5 六套 golden          无 diff
 ```

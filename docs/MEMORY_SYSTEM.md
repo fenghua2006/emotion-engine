@@ -454,4 +454,4 @@ python -m unittest test_l4_memory_integration.py -v
 - `test_l4_memory_integration.py`：27
 - `test_dashboard_memory.py`：6（仪表盘角色 × 用户隔离）
 - L6 记忆相关：`test_l6_mcp.py` 的 `recall` / `state` 工具测试
-- 全套：513 tests OK（L8.5 主动联系后）
+- 全套：523 tests OK（含可选场景 LLM 表达）

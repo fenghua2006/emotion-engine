@@ -921,6 +921,44 @@ def _contagion_reset(config):
 # ═══════════════════════════════════════════════
 
 _scene_lock = threading.Lock()
+SCENE_HISTORY_LIMIT = 40
+PROACTIVE_ACTION_CHECK = "check"
+PROACTIVE_ACTION_SEND = "send"
+
+SCENE_LLM_BASE_URL = "https://api.deepseek.com/v1"
+SCENE_LLM_MODEL = "deepseek-chat"
+SCENE_LLM_FALLBACK_URL = "https://api.moonshot.cn/v1"
+SCENE_LLM_FALLBACK_MODEL = "moonshot-v1-8k"
+
+
+def _scene_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off", ""):
+            return False
+    return bool(value)
+
+
+def _scene_llm_defaults():
+    """场景 LLM 的默认设置；默认关闭，不计入场景签名。"""
+    return {
+        "enabled": False,
+        "api_key": "",
+        "base_url": SCENE_LLM_BASE_URL,
+        "model": SCENE_LLM_MODEL,
+        "fallback_key": "",
+        "fallback_url": SCENE_LLM_FALLBACK_URL,
+        "fallback_model": SCENE_LLM_FALLBACK_MODEL,
+        "use_character_key": True,
+    }
+
+
 _scene_state = {
     "signature": None,
     "config": None,
@@ -929,10 +967,109 @@ _scene_state = {
     "db_path": DEFAULT_SOCIAL_DB_PATH,
     "turn_log": [],
     "last_payload": None,
+    "llm": _scene_llm_defaults(),
 }
-SCENE_HISTORY_LIMIT = 40
-PROACTIVE_ACTION_CHECK = "check"
-PROACTIVE_ACTION_SEND = "send"
+
+
+def _scene_llm_settings(raw=None, current=None):
+    """合并 LLM 设置；密钥只保存在服务端内存里，不进入公开配置。"""
+    raw = raw if isinstance(raw, dict) else {}
+    current = (
+        current if isinstance(current, dict)
+        else _scene_llm_defaults()
+    )
+
+    def plain(name, default, limit):
+        value = raw.get(name, current.get(name, default))
+        text = str(value if value is not None else "").strip()[:limit]
+        return text or default
+
+    def secret(name, clear_name):
+        if name not in raw:
+            return str(current.get(name) or "").strip()[:512]
+        value = str(raw.get(name) or "").strip()[:512]
+        if value:
+            return value
+        if _scene_bool(raw.get(clear_name), False):
+            return ""
+        return str(current.get(name) or "").strip()[:512]
+
+    base_url = plain("base_url", SCENE_LLM_BASE_URL, 500).rstrip("/")
+    fallback_url = plain(
+        "fallback_url", SCENE_LLM_FALLBACK_URL, 500,
+    ).rstrip("/")
+    return {
+        "enabled": _scene_bool(
+            raw.get("enabled"), bool(current.get("enabled", False)),
+        ),
+        "api_key": secret("api_key", "clear_api_key"),
+        "base_url": base_url or SCENE_LLM_BASE_URL,
+        "model": plain("model", SCENE_LLM_MODEL, 120),
+        "fallback_key": secret("fallback_key", "clear_fallback_key"),
+        "fallback_url": fallback_url or SCENE_LLM_FALLBACK_URL,
+        "fallback_model": plain(
+            "fallback_model", SCENE_LLM_FALLBACK_MODEL, 120,
+        ),
+        "use_character_key": _scene_bool(
+            raw.get("use_character_key"),
+            bool(current.get("use_character_key", True)),
+        ),
+    }
+
+
+def _scene_public_llm(settings):
+    """可安全返回给前端 / 写进快照的 LLM 配置。"""
+    settings = settings if isinstance(settings, dict) else {}
+    return {
+        "enabled": bool(settings.get("enabled", False)),
+        "base_url": str(
+            settings.get("base_url") or SCENE_LLM_BASE_URL,
+        ),
+        "model": str(settings.get("model") or SCENE_LLM_MODEL),
+        "fallback_url": str(
+            settings.get("fallback_url") or SCENE_LLM_FALLBACK_URL,
+        ),
+        "fallback_model": str(
+            settings.get("fallback_model") or SCENE_LLM_FALLBACK_MODEL,
+        ),
+        "use_character_key": bool(
+            settings.get("use_character_key", True),
+        ),
+        "has_api_key": bool(settings.get("api_key")),
+        "has_fallback_key": bool(settings.get("fallback_key")),
+    }
+
+
+def _scene_llm_apply(raw=None):
+    _scene_state["llm"] = _scene_llm_settings(
+        raw, _scene_state.get("llm"),
+    )
+    return _scene_state["llm"]
+
+
+def _scene_character_desc(actor):
+    custom = load_custom_chars().get(actor.character_id)
+    if isinstance(custom, dict):
+        desc = str(custom.get("desc") or "").strip()
+        if desc:
+            return desc
+    desc = _BUILTIN_DESCS.get(actor.character_id)
+    if desc:
+        return desc
+    return f"你是{actor.name}，一个情绪复杂、正在学习表达自己的人。"
+
+
+def _scene_character_api_key(character_id, settings):
+    """优先使用场景全局 key；可选回退到自定义角色自己的 key。"""
+    key = str(settings.get("api_key") or "").strip()
+    if key:
+        return key
+    if not bool(settings.get("use_character_key", True)):
+        return None
+    custom = load_custom_chars().get(character_id)
+    if not isinstance(custom, dict):
+        return None
+    return str(custom.get("api_key") or "").strip() or None
 
 
 def _scene_default_config():
@@ -947,6 +1084,9 @@ def _scene_default_config():
             for index, character in enumerate(SCENE_DEFAULT_ACTORS)
         ],
         "proactive": ProactiveConfig().to_dict(),
+        "llm": _scene_public_llm(
+            _scene_state.get("llm") or _scene_llm_defaults()
+        ),
     }
 
 
@@ -992,11 +1132,19 @@ def _scene_config(raw):
         "proactive": ProactiveConfig.from_mapping(
             raw.get("proactive"),
         ).to_dict(),
+        "llm": _scene_public_llm(
+            _scene_llm_settings(
+                raw.get("llm"), _scene_state.get("llm"),
+            )
+        ),
     }
 
 
 def _scene_signature(config):
-    return json.dumps(config, ensure_ascii=False, sort_keys=True, default=str)
+    # LLM 只影响台词表达，不应触发场景 / 关系重建。
+    payload = dict(config or {})
+    payload.pop("llm", None)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _scene_store():
@@ -1067,16 +1215,24 @@ def _scene_payload():
 def _scene_ensure(config=None):
     current = _scene_state.get("scene")
     if config is not None:
-        normalized = _scene_config(config)
+        raw = config if isinstance(config, dict) else {}
+        _scene_llm_apply(raw.get("llm"))
+        normalized = _scene_config(raw)
         if current is None or _scene_signature(normalized) != _scene_state.get("signature"):
             _build_scene_state(normalized)
+        else:
+            _scene_state["config"] = normalized
         return
     if current is None:
         _build_scene_state(_scene_default_config())
 
 
 def _scene_reset(config=None, *, reset_relationships=False, store=None):
-    config = _scene_config(config or _scene_default_config())
+    raw = config if isinstance(config, dict) else {}
+    if config is None:
+        raw = _scene_default_config()
+    _scene_llm_apply(raw.get("llm"))
+    config = _scene_config(raw)
     store = store or _scene_store()
     if reset_relationships:
         store.delete_world(config["world_id"])
@@ -1183,8 +1339,8 @@ def _scene_proactive(payload):
     return turn_payload
 
 
-def _scene_actor_payload(actor, result):
-    return {
+def _scene_actor_payload(actor, result, *, include_llm=False):
+    payload = {
         "actor_id": actor.actor_id,
         "name": actor.name,
         "character_id": actor.character_id,
@@ -1200,6 +1356,11 @@ def _scene_actor_payload(actor, result):
         "zone": result.get("tolerance", {}).get("zone", "regulated"),
         "needs_llm": bool(result.get("needs_llm", False)),
     }
+    if include_llm:
+        payload["llm_used"] = bool(result.get("_llm_used", False))
+        payload["llm_backend"] = result.get("_llm_backend") or ""
+        payload["llm_error"] = result.get("_llm_error") or ""
+    return payload
 
 
 def _scene_turn(payload):
@@ -1233,17 +1394,44 @@ def _scene_turn(payload):
     appraisals = {
         actor_id: appraisal for actor_id in scene.actors
     }
+    llm_settings = _scene_state.get("llm") or _scene_llm_defaults()
+    use_llm = bool(llm_settings.get("enabled"))
     actors_payload = {}
     for actor_id, actor in scene.actors.items():
-        result = respond(
-            actor.engine,
-            text,
-            appraisal=appraisal,
-            character_id=actor.character_id,
-            boundary_violation=bool(boundary_violations.get(actor_id, False)),
-            contagion_bias=biases.get(actor_id),
+        common = {
+            "appraisal": appraisal,
+            "character_id": actor.character_id,
+            "boundary_violation": bool(
+                boundary_violations.get(actor_id, False)
+            ),
+            "contagion_bias": biases.get(actor_id),
+        }
+        if use_llm:
+            try:
+                result = respond_llm(
+                    actor.engine,
+                    text,
+                    character_name=actor.name,
+                    character_desc=_scene_character_desc(actor),
+                    api_key=_scene_character_api_key(
+                        actor.character_id, llm_settings,
+                    ),
+                    base_url=llm_settings["base_url"],
+                    model=llm_settings["model"],
+                    fallback_key=llm_settings.get("fallback_key") or None,
+                    fallback_url=llm_settings["fallback_url"],
+                    fallback_model=llm_settings["fallback_model"],
+                    **common,
+                )
+            except Exception as exc:
+                # 网络 / 客户端异常也不应中断整个场景回合。
+                result = respond(actor.engine, text, **common)
+                result["_llm_error"] = str(exc)
+        else:
+            result = respond(actor.engine, text, **common)
+        actors_payload[actor_id] = _scene_actor_payload(
+            actor, result, include_llm=use_llm,
         )
-        actors_payload[actor_id] = _scene_actor_payload(actor, result)
 
     turn = scene.record_turn(
         speaker_id,
@@ -1262,8 +1450,10 @@ def _scene_turn(payload):
         "scene": scene.snapshot(),
         "config": _scene_state.get("config"),
     }
+    if use_llm:
+        result["llm"] = _scene_public_llm(llm_settings)
     log = _scene_state.setdefault("turn_log", [])
-    log.append({
+    entry = {
         "turn": result["turn"],
         "source": speaker_id,
         "text": text,
@@ -1273,7 +1463,13 @@ def _scene_turn(payload):
             for actor_id, item in actors_payload.items()
         },
         "relationship_changes": turn["relationship_changes"],
-    })
+    }
+    if use_llm:
+        entry["llm_used"] = {
+            actor_id: bool(item.get("llm_used", False))
+            for actor_id, item in actors_payload.items()
+        }
+    log.append(entry)
     if len(log) > SCENE_HISTORY_LIMIT:
         del log[:-SCENE_HISTORY_LIMIT]
     _scene_state["last_payload"] = result

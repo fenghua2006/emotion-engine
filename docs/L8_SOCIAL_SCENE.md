@@ -1,6 +1,6 @@
 # L8：朋友圈场景（v0）
 
-> 代码：`social.py` · 测试：`test_l8_scene.py` + `test_scene_dashboard.py` · 网页：`dashboard/scene.html`（`/scene`）
+> 代码：`social.py` · 测试：`test_l8_scene.py` + `test_scene_dashboard.py` + `test_scene_llm.py` · 网页：`dashboard/scene.html`（`/scene`）
 > 前置：L7 多角色情绪感染（`contagion.py`）
 
 L8 v0 把“多角色感染”从一个实验台推进到**可连续对话的朋友圈场景**：
@@ -226,12 +226,72 @@ relationship_changes, scene{...}, config
 
 `turn_log` 只保留最近 40 回合，存于进程内；关系本身在 SQLite 中。
 
+### 5.1 可选 LLM 表达（默认关闭）
+
+`/scene` 的台词生成有两种模式：
+
+| 模式 | 调用 | 情绪计算 | 台词 |
+|---|---|---|---|
+| 默认（`llm.enabled=false`） | `respond()` | 本地 tick | 本地模板 |
+| 可选（`llm.enabled=true`） | `respond_llm()` | 本地 tick（显式 `appraisal`） | DeepSeek / Kimi |
+
+硬边界：
+
+- 默认关闭；关闭时 `/scene` 的调用链、返回键集合与台词生成路径不变；
+- 开启后仍先走本地 `respond()`，LLM **只替换** `utterance`；
+- 场景回合的 appraisal 仍由 JEV / 显式字典给出，不由 LLM 重新判定；
+- 每个角色仍只 tick 一次；`contagion_bias` / `boundary_violation` 原样传入；
+- API 失败、超时或无 key 时自动保留本地模板；
+- 不写 `Personality` / `CharacterCore`，不额外写用户关系记忆；
+- LLM 设置不进入 `_scene_signature`，改 key / model 不会重建场景或清空日志。
+
+配置结构（服务端实际状态）：
+
+```json
+{
+  "llm": {
+    "enabled": false,
+    "api_key": "",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "fallback_key": "",
+    "fallback_url": "https://api.moonshot.cn/v1",
+    "fallback_model": "moonshot-v1-8k",
+    "use_character_key": true
+  }
+}
+```
+
+`api_key` / `fallback_key` 只保存在 `dashboard/server.py` 的进程内存中：
+
+- `/api/scene/state`、回合响应与 `turn_log` 只返回
+  `has_api_key` / `has_fallback_key`，不返回密钥本身；
+- 输入框留空表示保持当前 key；`clear_api_key` / `clear_fallback_key`
+  为 `true` 时才清除；
+- 全局 key 为空且 `use_character_key=true` 时，使用自定义角色
+  `_custom_chars.json` 里的 `api_key`；
+- 两者都为空时不传 key，由 `llm_client` 读取 `DEEPSEEK_API_KEY` 环境变量。
+
+每个角色调用 `respond_llm()` 时传入：
+
+```text
+appraisal / boundary_violation / contagion_bias
+character_id / character_name / character_desc
+api_key / base_url / model
+fallback_key / fallback_url / fallback_model
+```
+
+`character_desc` 优先取自定义角色 `desc`，其次取内置 `_BUILTIN_DESCS`。
+启用后角色 payload 额外带 `llm_used` / `llm_backend` / `llm_error`；
+只有启用时回合响应才带顶层 `llm` 公开配置。主动联系的 send 复用普通
+场景回合，因此也会自动获得 LLM 台词（调度器本身仍不调用 LLM）。
+
 ---
 
 ## 6. 测试与验收
 
 ```bash
-python -m unittest test_l8_scene.py test_scene_dashboard.py -v
+python -m unittest test_l8_scene.py test_scene_dashboard.py test_scene_llm.py -v
 ```
 
 - `test_l8_scene.py`（15）：关系存取与世界隔离、clamp / 自环、共享引擎拒绝、
@@ -240,18 +300,23 @@ python -m unittest test_l8_scene.py test_scene_dashboard.py -v
 - `test_scene_dashboard.py`（13）：场景 payload、回合偏置与台词、用户回合、
   方向关系、负面 tension、重建保留 / 清空关系、配置变更清日志、引擎隔离、
   日志上限、非法输入、appraisal clamp、store 重开、页面接口冒烟。
+- `test_scene_llm.py`（10）：默认路径不调用 LLM、每角色一次 LLM 调用、
+  appraisal / 感染偏置 / 人设 / key 透传、密钥脱敏、空 key 保留与显式清除、
+  异常回退、客户端失败回退、自定义角色 key 开关、LLM 设置不重建场景、
+  主动联系 send 使用 LLM、页面控件冒烟。
 
 当前结果：
 
 ```text
-513 tests total, OK（含 L8.5 的 30 个测试）
+523 tests total, OK（含 L8.5 的 30 个测试）
 ruff check . -> All checks passed
 coverage report -> 88% total（branch，gate 80）
 L1/L2/L5 六套 golden 无 diff
 ```
 
 L8 没有新增 golden：它不改变任何默认 tick 公式，只编排隔离引擎；契约由
-28 个 L8 测试、默认路径键集合不变、六套既有 golden 不变共同锁定。
+38 个 L8 测试、默认路径键集合不变、六套既有 golden 不变共同锁定。
+LLM 层默认关闭，测试通过 monkeypatch 隔离网络，不依赖真实 key。
 
 ---
 
@@ -264,12 +329,16 @@ L8 没有新增 golden：它不改变任何默认 tick 公式，只编排隔离�
   不是 LLM 生成的关系历史。
 - **appraisal 目前由发言文本统一生成**，同一回合所有角色使用同一份
   appraisal；后续可接入每个角色自己的 JEV / 记忆上下文。
+- **LLM 表达是逐角色串行调用**：3 个角色最多等待 3 × 15s；没有流式输出、
+  并发请求或场景级 transcript。prompt 只包含角色人设、当前文本与引擎状态。
+- **LLM key 只存在进程内存**：服务重启即丢失；仪表盘 HTTP 未加认证，
+  只应在本机 / 可信内网使用，生产环境需要 HTTPS 与访问控制。
 - **没有群体级归一化**：每个听者独立截断偏置。
 - **没有关系历史表**：只保留当前关系快照与最近 40 回合进程内日志。
 - **场景引擎状态不持久化**：重启后情绪归零，关系保留。
 - 仪表盘仍是单线程 `HTTPServer`；`PeerRelationshipStore` 的单连接假设与
   现有 `RelationshipMemoryStore` 相同。改成多线程服务器时需要按线程建连接
-  或加锁。
+  或加锁；加入 LLM 后单线程会放大等待时间。
 
 ---
 
@@ -279,4 +348,7 @@ L8 没有新增 golden：它不改变任何默认 tick 公式，只编排隔离�
   `FriendScene.record_turn()` 自动观察，`/api/scene/proactive` 支持
   check / send；发送复用普通场景回合，不重复 tick。详细契约见
   [`L8_5_PROACTIVE_CONTACT.md`](L8_5_PROACTIVE_CONTACT.md)。
-- 更后期：每角色独立 JEV / appraisal、关系历史与学习型更新、群体级归一化。
+- **可选 LLM 表达已接入**：`llm.enabled` 默认关闭；开启后每个角色由
+  `respond_llm()` 写台词，失败回退本地模板，见 §5.1。
+- 更后期：每角色独立 JEV / appraisal、场景 transcript / 流式表达、
+  关系历史与学习型更新、群体级归一化。

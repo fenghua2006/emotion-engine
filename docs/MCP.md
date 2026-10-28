@@ -126,7 +126,7 @@ POST /api/replay
 
 ```text
 test_l6_mcp.py               16 tests（协议 / 工具 / stdio 子进程）
-全量                         513 tests OK（L8.5 主动联系后）
+全量                         523 tests OK（含可选场景 LLM 表达）
 ruff check .                 All checks passed
 ```
 

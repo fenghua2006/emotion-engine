@@ -48,7 +48,7 @@ python -m unittest test_l7_1_bidirectional.py test_l7_2_relationship_model.py -v
 python -m unittest test_l7_3_network.py test_l7_4_directional.py -v
 
 # L8 social scene
-python -m unittest test_l8_scene.py test_scene_dashboard.py -v
+python -m unittest test_l8_scene.py test_scene_dashboard.py test_scene_llm.py -v
 
 # L8.5 proactive contact
 python -m unittest test_l85_proactive.py test_proactive_dashboard.py -v
@@ -56,7 +56,7 @@ python -m unittest test_l85_proactive.py test_proactive_dashboard.py -v
 # Dashboard relation-memory isolation
 python -m unittest test_dashboard_memory.py -v
 
-# Full suite (513 tests)
+# Full suite (523 tests)
 python -m unittest discover
 
 # L6 JEV / MCP
@@ -157,7 +157,7 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
 - Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 111, L8 adds 28, L8.5 adds 30, dashboard relation-memory adds 6, and the full suite is 513. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 111, L8 adds 38 (including 10 optional scene LLM tests), L8.5 adds 30, dashboard relation-memory adds 6, and the full suite is 523. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
 
 ### Relationship memory (L4 v0.2)
 
@@ -237,8 +237,9 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `record_turn(source_id, appraisals, boundary_violations=None)` updates listener → speaker for every listener: `valence = 0.5*goal_conduciveness + 0.5*social_evaluation`; trust `+0.02*valence`, love `+0.005*max(0,valence)`, familiarity `+0.004 + 0.006*goal_relevance`, tension `+0.04*max(0,-valence)`; boundary violation adds trust `-0.05` and tension `+0.08`. User turns increment the scene turn but update no peer relationships.
 - `step()` is the full library path (bias → tick all → record). The dashboard deliberately uses `biases_for()` + `respond()` once per actor + `record_turn()` to generate utterances without double ticking.
 - Scene engine emotional state is not persisted; relationships are. `FriendScene` changes no default tick behavior and adds no golden.
-- 28 tests: `test_l8_scene.py` (15) + `test_scene_dashboard.py` (13). Web lab: `dashboard/scene.html` + `/api/scene/*`. Details: `docs/L8_SOCIAL_SCENE.md`.
-- Deferred: per-character appraisals, learned relationship updates, relationship history, group-level normalization.
+- **Optional LLM utterance layer (default off)**: `dashboard/server.py` stores an in-memory `llm` block. When `llm.enabled=true`, `_scene_turn` still calls local `respond()` first (one tick), then per actor replaces `utterance` via `respond_llm(..., appraisal=appraisal, use_jev=False, contagion_bias=...)`. Network failure keeps the local template. API keys never enter scene snapshots / turn responses / turn logs: only `has_api_key` / `has_fallback_key` are public. `llm` is excluded from `_scene_signature`, so key/model changes do not rebuild the scene. Proactive `send` reuses `_scene_turn` and therefore follows the same switch.
+- 38 tests: `test_l8_scene.py` (15) + `test_scene_dashboard.py` (13) + `test_scene_llm.py` (10). Web lab: `dashboard/scene.html` + `/api/scene/*`. Details: `docs/L8_SOCIAL_SCENE.md`.
+- Deferred: per-character appraisals, learned relationship updates, relationship history, LLM concurrency / streaming / scene transcript, group-level normalization.
 
 ### L8.5 proactive contact (v0)
 
@@ -249,9 +250,9 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Gate order is fixed: quiet hours → min silence → cooldown → daily limit → unanswered limit → threshold.
 - `observe_turn()` records activity; a user turn clears every actor's pending count. `mark_contact()` only increments pending / daily counters and timestamps.
 - `FriendScene` owns `self.proactive`; `record_turn()` calls `observe_turn()`, `snapshot()` includes `proactive`, and `set_proactive_config()` replaces rules without resetting counters.
-- `/api/scene/proactive` supports `{"action":"check"}` and `{"action":"send"}` (optional `actor_id`, test-only `now`). Send generates a deterministic template line, runs one normal scene turn, then marks contact — no duplicate tick, no extra memory write.
+- `/api/scene/proactive` supports `{"action":"check"}` and `{"action":"send"}` (optional `actor_id`, test-only `now`). Send generates a deterministic template line, runs one normal scene turn, then marks contact — no duplicate tick, no extra memory write. The scheduler itself never calls an LLM; if the scene has `llm.enabled=true`, that reused scene turn writes the line via `respond_llm`.
 - 30 tests: `test_l85_proactive.py` (17) + `test_proactive_dashboard.py` (13). Details: `docs/L8_5_PROACTIVE_CONTACT.md`.
-- Deferred: scheduling-state persistence, background timer / message queue, LLM proactive lines, per-message read receipts, actor-to-actor proactive UI.
+- Deferred: scheduling-state persistence, background timer / message queue, streaming / concurrent LLM lines, per-message read receipts, actor-to-actor proactive UI.
 
 ### Core data flow
 
@@ -331,7 +332,7 @@ Two systems coexist:
 
 ### Dashboard
 
-`dashboard/server.py` — stdlib HTTP server. `dashboard/index.html` — Chart.js-based single-character SPA. `dashboard/contagion.html` — L7 multi-character lab (`/contagion`). `dashboard/scene.html` — L8 friend scene + L8.5 proactive controls (`/scene`).
+`dashboard/server.py` — stdlib HTTP server. `dashboard/index.html` — Chart.js-based single-character SPA. `dashboard/contagion.html` — L7 multi-character lab (`/contagion`). `dashboard/scene.html` — L8 friend scene + L8.5 proactive controls + optional LLM config card (`/scene`).
 - `GET /api/state` — full state JSON (10 channels felt+raw, atmosphere, tolerance, dominant, memory stats, scars)
 - `GET /api/history?n=120` — recent data points for the line charts; each point includes `tolerance` (`load`, `capacity`, `zone`, `overload_ratio`, `capacity_by_domain`)
 - Tolerance card draws zone bands + load/capacity + four-domain capacity lines; the emotion chart remains separate.
@@ -369,7 +370,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 111 dedicated tests, and all six existing goldens remaining unchanged when contagion is off. L8 also has no golden: it only orchestrates isolated engines and persisted relationships; its contract is the 28 dedicated tests plus the unchanged default path and six goldens. L8.5 adds no golden: it only reads state and schedules ordinary scene turns; its contract is the 30 dedicated tests, default-path key-set compatibility, and all six goldens remaining unchanged.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 111 dedicated tests, and all six existing goldens remaining unchanged when contagion is off. L8 also has no golden: it only orchestrates isolated engines and persisted relationships; its contract is the 38 dedicated tests (including the 10 default-off LLM tests) plus the unchanged default path and six goldens. L8.5 adds no golden: it only reads state and schedules ordinary scene turns; its contract is the 30 dedicated tests, default-path key-set compatibility, and all six goldens remaining unchanged.
 
 ## Related files (Desktop, not in repo)
 
