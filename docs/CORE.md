@@ -158,7 +158,7 @@ python -m unittest test_core_line.py test_tolerance.py \
   test_l7_contagion.py test_l7_integration.py \
   test_l7_1_bidirectional.py test_l7_2_relationship_model.py \
   test_l7_3_network.py test_l7_4_directional.py -v
-# 上述回归 383 tests, OK；全量 436 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6、98 个 L7 测试）
+# 上述回归 383 tests, OK；L8.5 后全量 513 tests（含 32 个 L3、25 个 L3.5、38 个 L5、12 个 L5.1、27 个 L4、17 个 P0、53 个 L6、111 个 L7、28 个 L8、30 个 L8.5 测试）
 ```
 
 L6 的 `jev.py` / `noul.py` 只在显式开启时生成输入；L7 的 `contagion.py`

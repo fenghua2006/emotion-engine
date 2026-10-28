@@ -1,4 +1,4 @@
-# 增量开发计划（L0–L7 + L3.5）
+# 增量开发计划（L0–L8.5 + L3.5）
 
 > 主开发目录：`C:\Users\Administrator\Desktop\emotion-engine`。后续所有修改、测试、提交都在这里。
 > D 盘 `D:\Users\Administrator\Desktop\emotion-engine` 是 2026-10-25 快照，停止更新。
@@ -19,7 +19,9 @@
 | **L5** | 忍耐空间 / 耐受校准 | ✅ 2026-10-26（校准核心 v0 + L5.1） | 双 golden；四域容量；L4 后 285 tests |
 | **P0** | 可维护性护栏 | ✅ 2026-10-27 | tick 拆分 / 表达&LLM 分层 / ruff+coverage+CI / schema 版本；285 tests |
 | **L6** | 表达 / LLM / JEV / MCP | ✅ 2026-10-27（v0） | 规则优先 + LLM 可选回退；Noul 边界信号；MCP stdio；338 tests |
-| **L7** | 多角色情绪感染 | ✅ 2026-10-27（v0 + v0.1 + v0.2 + v0.3 + v0.4） | 单向 / 双向 / 群体网络；四维有界先验；显式 / 自动 / 方向性关系强度；默认路径零变化；436 tests |
+| **L7** | 多角色情绪感染 | ✅ 2026-10-27（v0 + v0.1 + v0.2 + v0.3 + v0.4） | 单向 / 双向 / 群体网络；四维有界先验；显式 / 自动 / 方向性关系强度；网页实验台；默认路径零变化；455 tests |
+| **L8** | 朋友圈场景 | ✅ 2026-10-28（v0） | 有向关系持久化；关系强度推导感染边；回合后关系结算；`/scene` 网页实验台；默认路径零变化；483 tests |
+| **L8.5** | 主动联系 / 调度 | ✅ 2026-10-28（v0） | 引擎外意愿评估；静默 / 冷却 / 每日 / 未回复 / 安静时段门控；发送走普通场景回合；30 tests；513 total |
 
 ## L0：核心情绪线 ✅
 
@@ -294,7 +296,10 @@ L3 legacy：atmosphere -0.3774803783593781，sadness 0.6125356194066094，
     确定性摘要，每次成功写入后自动刷新；
   - `migrate_legacy_memories()`：旧 `emotion.db` → 关系域记忆，可重复执行。
 - `scripts/migrate_legacy_memory.py`：迁移 CLI，支持 `--dry-run`。
-- `test_l4_memory_integration.py`：27 个测试。
+- `dashboard/server.py`：持久记忆统一到 `RelationshipMemoryStore`；
+  `engine.memory` 仅保留每引擎独立的工作记忆。
+- `test_l4_memory_integration.py`：27 个测试；
+  `test_dashboard_memory.py`：6 个仪表盘角色 × 用户隔离测试。
 
 验收结果：
 
@@ -314,7 +319,7 @@ appraisal prior signed / capped ±0.2 / user isolated
 - 文本 → `Appraisal` 的 JEV 已由 L6 补齐（`jev.py`，默认关闭、可回退）；
   记忆先验仍需显式 `Appraisal` 才能生效。
 - 摘要的 LLM 叙事版；规则版只压缩结构化信息。
-- 旧 `MemoryStoreDB` 的自动退役；目前只提供迁移工具。
+- 旧 `MemoryStoreDB` 的彻底退役；仪表盘已不再使用，`engine.py` 中的旧类仍供旧脚本/测试使用，迁移工具已提供。
 
 ## L5：耐受校准 ✅ v0（校准核心）
 
@@ -506,8 +511,11 @@ v0.4 区分 A→B 与 B→A 的方向性关系强度。
 - `test_l7_contagion.py`（14）+ `test_l7_integration.py`（13）+
   `test_l7_1_bidirectional.py`（14）+ `test_l7_2_relationship_model.py`（14）+
   `test_l7_3_network.py`（22）+ `test_l7_4_directional.py`（21）。
+- `dashboard/contagion.html` + `dashboard/server.py`：`/contagion` 网页实验台
+  与 `/api/contagion/*`；最多 6 节点 / 20 边，配置签名变化才重建引擎，
+  状态仅进程内存。`test_contagion_dashboard.py`（13）。
 - `docs/L7_MULTI_CHARACTER.md`：数据流、公式、API、双向、自动关系、群体传播、
-  方向关系、隔离、限制。
+  方向关系、网页实验台、隔离、限制。
 
 关键口径：
 
@@ -526,10 +534,11 @@ v0.4 区分 A→B 与 B→A 的方向性关系强度。
 验收结果：
 
 ```text
-98 L7 tests, OK
-436 tests total, OK
+98 个库内 L7 tests + 13 个网页实验台服务端 tests
+= 111 个 L7 tests, OK
+455 tests total, OK
 ruff check . -> All checks passed
-coverage report -> 87% total（branch，gate 80）
+coverage report -> 88% total（branch，gate 80）
 L1/L2/L5 六套 golden 无 diff
 demo：单向 B 四维 bias -0.08；双向 A/B 各自获得对方偏置；
       strength=0.5 时 effective_gain=0.1；auto-strength 输出 mode=auto；
@@ -543,16 +552,137 @@ demo：单向 B 四维 bias -0.08；双向 A/B 各自获得对方偏置；
 - 群体级归一化（当前每个节点独立截断）；
 - 用 A 的最终表达状态而不仅是输入 appraisal 作为感染源。
 
+## L8：朋友圈场景 ✅ v0
+
+目标：把 L7 感染接成可连续对话的多角色场景，同时保持每个角色的引擎、
+记忆、伤疤、耐受与人格隔离。关系是有向的、可持久化的，并反过来决定感染边。
+
+交付：
+
+- `social.py`：
+  - `PeerRelationship`：有向关系，键 `(world_id, source_id, target_id)`；
+    `trust` / `love` / `familiarity` / `tension` / `boundaries` / `summary`
+    / `interactions` / `updated_at`；构造与写入时 clamp，自环拒绝；
+  - `PeerRelationshipStore`：标准库 SQLite，表 `peer_relationships`，
+    `SOCIAL_SCHEMA_VERSION = 1`；world 级隔离，默认 `:memory:`；
+  - `SceneActor` / `FriendScene`：拒绝重复 actor ID、同一引擎、共享
+    `state` / `memory` / `scars` / `tolerance`；
+  - `edges()`：方向关系强度 × `(1 - tension_penalty × tension)`，
+    `tension_penalty` 默认 0.25；
+  - `biases_for()`：仅角色发言者产生四维偏置；`user` 返回空；可选
+    `relevance` 逐目标门控；
+  - `record_turn()`：按听者 appraisal 更新“听者 → 发言者”；
+    用户回合只推进 `turn`，不更新角色间关系；
+  - `step()`：库内完整路径；仪表盘用 `biases_for()` + `respond()` +
+    `record_turn()`，避免重复 tick；
+  - 不导入 `engine.py`，通过 duck typing 调用 `.tick()`。
+- `dashboard/scene.html` + `dashboard/server.py`：`/scene` 网页实验台与
+  `/api/scene/*`；2–4 角色、配置编辑、连续对话、关系表、感染边与回合日志；
+  场景引擎状态仅进程内，关系持久化到 `dashboard/_social_relationships.db`。
+- `test_l8_scene.py`（15）+ `test_scene_dashboard.py`（13）。
+- `docs/L8_SOCIAL_SCENE.md`：数据模型、回合公式、API、持久化、隔离、限制。
+
+关键口径：
+
+- 关系更新只改关系快照，不写引擎状态、记忆、伤疤、耐受或人格。
+- 感染偏置仍走 L7 的四维 + `gain` + `cap`，不新增传输维度。
+- 关系是有向的；A→B 与 B→A 分别结算，同一发言可让不同听者产生不同变化。
+- 场景引擎情绪不持久化，重启后关系保留、情绪归零。
+- 默认路径与六套 golden 逐位不变；L8 不新增 golden。
+- 主动联系 / 调度、每角色独立 appraisal、关系历史与学习型更新不在 v0。
+
+验收结果：
+
+```text
+15 个库内 L8 tests + 13 个网页实验台服务端 tests
+= 28 个 L8 tests, OK
+483 tests total, OK
+ruff check . -> All checks passed
+coverage report -> 88% total（branch，gate 80）
+L1/L2/L5 六套 golden 无 diff
+/scene HTTP 200；state / reset / turn API 正常；非法输入返回 400
+```
+
+仍未做：
+
+- 每个角色使用自己的 JEV / 记忆上下文，而不是共享同一份 appraisal；
+- 结构化关系历史与学习型关系更新；
+- 群体级归一化。
+
+## L8.5：主动联系 / 调度 ✅ v0
+
+目标：在没有人先开口时，决定“谁、什么时候”主动联系用户；保持确定性、
+可回放，并且不污染情绪动力学。
+
+交付：
+
+- `proactive.py`：
+  - `ProactiveConfig`：最小静默、silence window、冷却、每日上限、
+    未回复上限、安静时段、threshold 与七项权重；所有值构造时 clamp；
+  - `ProactiveScheduler`：
+    - `assess()` / `evaluate()` / `eligible()` / `choose()` 只读评估；
+    - urgency = 思念 / 静默 / 亲密 / 信任 / 熟悉 / 紧张 / 未回复的
+      加权和，截断到 `[0, 1]`；
+    - 固定门控顺序：安静时段 → 最小静默 → 冷却 → 每日上限 →
+      未回复上限 → 阈值；
+    - `observe_turn()` 记录活动；用户发言清空所有 `pending`；
+    - `mark_contact()` 只更新调度状态，不 tick、不写引擎 / 关系 / 记忆；
+    - `snapshot()` 输出配置、候选、pending、每日计数与累计次数；
+  - 不导入 `engine.py` / `social.py` / `contagion.py`，只 duck typing 读状态。
+- `social.FriendScene`：
+  - 持有 `self.proactive`；
+  - `record_turn()` 调用 `observe_turn()`；
+  - `snapshot()` 增加 `proactive`；
+  - `set_proactive_config()`。
+- `dashboard/scene.html` + `/api/scene/proactive`：
+  - check / send；send 支持自动选择或 `actor_id`；
+  - 发送生成确定性的模板台词，然后走一次普通 `_scene_turn`，最后
+    `mark_contact`；
+  - 页面展示 urgency、eligible / blocked_reason、原因与未回复数；
+  - 配置面板可编辑主动联系参数（分钟 / 小时在 UI 转换）。
+- `test_l85_proactive.py`（17）+ `test_proactive_dashboard.py`（13）。
+- `docs/L8_5_PROACTIVE_CONTACT.md`：公式、门控、状态、API、限制。
+
+关键口径：
+
+- 主动联系不进入 `tick()`，不新增 tick 阶段或 golden；
+- 调度状态仅内存；场景重建 / 服务重启后冷却、每日与未回复计数归零；
+- 发送只走既有场景回合，因此关系更新 / 感染偏置仍遵守 L7 / L8 契约；
+- 用户任意发言清除未回复计数；角色发言不增加 `pending`；
+- 单线程假设不变，调度器由 `/scene` 的锁串行化。
+
+验收结果：
+
+```text
+17 个核心 L8.5 tests + 13 个主动联系仪表盘 tests
+= 30 个 L8.5 tests, OK
+513 tests total, OK
+ruff check . -> All checks passed
+coverage report -> 88% total（branch，gate 80）
+L1/L2/L5 六套 golden 无 diff
+/scene HTTP 200；proactive check / send 正常；send 后 pending=1、turn+1
+```
+
+仍未做：
+
+- 调度状态持久化（跨重启保留冷却 / 每日 / 未回复计数）；
+- 后台定时器与消息队列（到点自动发送）；
+- LLM 主动台词；
+- 逐条已读 / 消息 ID，而不是“用户任意发言即清零”；
+- 面向角色之间的主动联系 UI 与 API。
+
 ## 顺序
 
 ```text
-L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L4 ✅ → P0 ✅ → L6 ✅ → L7 ✅
+L0 → L1 → L2 → L3 → L3.5 → L5 ✅ → L4 ✅ → P0 ✅ → L6 ✅ → L7 ✅ → L8 ✅ → L8.5 ✅
 ```
 
 L3.5 依赖 L2（guilt / trust / love）与 L3（稳定的氛围/伤疤）；L5 校准核心与
 L5.1 表达/仪表盘已完成；L4 v0.2、P0 可维护性护栏、L6（JEV / Noul / LLM /
-MCP）与 L7 v0.4（单向 / 双向 / 群体感染、显式 / 自动 / 方向性关系强度）已完成。
-下一层可按需进入结构化关系历史、群体级归一化，或表达侧元情绪接入。
+MCP）、L7 v0.4（单向 / 双向 / 群体感染、显式 / 自动 / 方向性关系强度）与
+L8 v0（朋友圈场景）与 L8.5 v0（主动联系调度）已完成。
+下一层可进入结构化关系历史、群体级归一化、每角色独立 appraisal，
+或表达侧元情绪接入；调度状态持久化 / 后台定时器可独立推进。
 
 ## 每层 Definition of Done
 

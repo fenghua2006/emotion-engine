@@ -1,7 +1,7 @@
 # 架构与维护边界
 
 > 目标：让每个 L 阶段都能独立修改、独立测试，不靠“读完整条 tick”才能判断影响。
-> 适用版本：v0.8-dev + P0 可维护性重构 + L6（JEV / Noul / MCP）+ L7（多角色情绪感染）。
+> 适用版本：v0.8.5-dev + P0 可维护性重构 + L6（JEV / Noul / MCP）+ L7（多角色情绪感染 + 网页实验台）+ L8（朋友圈场景）+ L8.5（主动联系）。
 > 相关：`docs/CORE.md`（L0）、`docs/INCREMENTAL_PLAN.md`（阶段计划）。
 
 ## 1. 依赖方向
@@ -17,9 +17,11 @@ core.py              纯动力学；只依赖标准库
   ├── jev.py         L6 文本 → Appraisal；只依赖 core + llm_client
   ├── noul.py        L6 文本边界信号；只依赖标准库
   ├── contagion.py   L7 多角色感染；只依赖 core.APPRAISAL_LIMITS + 标准库
+  ├── proactive.py   L8.5 主动联系调度；只读状态，不导入 engine / social
+  ├── social.py      L8 朋友圈编排；依赖 contagion / proactive + 标准库，不导入 engine
   └── engine.py      组合根：按顺序调用以上模块
         ├── mcp_server.py  零依赖 stdio 外壳；只调用 engine / memory / jev / noul
-        ├── dashboard/     只读 engine 输出，不反向写动力学
+        ├── dashboard/     单角色面板 + L7 多角色实验台 + L8 朋友圈 + L8.5 主动联系；只读 engine 输出，不反向写动力学
         └── characters/    只构造 Personality / Engine
 ```
 
@@ -31,6 +33,8 @@ core.py              纯动力学；只依赖标准库
 - 记忆可以影响 appraisal / relationship / prompt，但**永不写** `Personality` / `CharacterCore`。
 - JEV 只返回 `Appraisal` / confidence / evidence，不写 state、人格或记忆；Noul 只返回文本信号。
 - L7 感染只返回四维有界 `Appraisal` 偏置；不直接写 `EmotionalState`，不写记忆 / 人格 / 快照。
+- L8 只在引擎外部编排：持久化有向关系、调用 L7 偏置、回合后更新关系；不新增 `tick()` 阶段，不写引擎状态。
+- L8.5 只读评估主动联系意愿；`mark_contact()` 只更新调度计数，不 tick、不写状态 / 记忆 / 人格 / 关系；发送必须复用普通场景回合。
 - `mcp_server.py` 不导入 dashboard，也不修改 engine 的内部状态结构；工具失败以 `isError` 返回。
 
 ## 2. tick 管线
@@ -133,7 +137,53 @@ python scripts/generate_l5_tolerance_golden.py --legacy --check
 - 感染是每 tick 输入，不写入快照或记忆；`SNAPSHOT_VERSION` /
   `MEMORY_SCHEMA_VERSION` 不变。慢通道在 appraisal 前运行，因此同一 tick
   的 love / trust 生长仍看原始 appraisal。
+- `dashboard/contagion.html` + `/api/contagion/*` 是实验台外壳：每个节点
+  新建独立引擎，配置签名变化时重建；tick 状态只在进程内保留，不读写单角色
+  仪表盘存档。它只展示 L7 输出，不实现第二套感染逻辑。
 - 详细契约与演示：[`L7_MULTI_CHARACTER.md`](L7_MULTI_CHARACTER.md)。
+
+### L8 朋友圈场景
+
+`social.py` 是引擎外部的场景编排层，不导入 `engine.py`，通过 duck typing
+调用 `.tick()`；它依赖 `contagion.py` 的纯函数与边模型：
+
+- `PeerRelationship`：有向关系快照，键为
+  `(world_id, source_id, target_id)`；字段 trust / love / familiarity /
+  tension / boundaries / summary / interactions。
+- `PeerRelationshipStore`：标准库 SQLite，schema
+  `SOCIAL_SCHEMA_VERSION = 1`；world 级隔离，默认 `:memory:`，仪表盘默认
+  `dashboard/_social_relationships.db`。
+- `FriendScene.edges()`：边强度 =
+  `directional_relationship_strength(...) × (1 - tension_penalty × tension)`；
+  tension 越高，感染越弱。
+- `FriendScene.biases_for()`：只允许角色发言者，返回 L7 四维有界偏置；
+  可选 `relevance` 逐目标门控。
+- `FriendScene.record_turn()`：按听者的 appraisal 更新“听者 → 发言者”；
+  用户发言只推进场景回合，不改角色间关系。
+- `FriendScene.step()` 是完整库路径；仪表盘改用
+  `biases_for()` + `respond()` + `record_turn()`，避免每个角色被 tick 两次。
+- 场景引擎的情绪状态不持久化，只持久化关系；不改变默认 tick，不新增
+  result / trace 键，不新增 golden。
+- `dashboard/scene.html` + `/api/scene/*` 是网页外壳；单线程 `HTTPServer`
+  下 SQLite 单连接可用，改多线程时需按线程建连接或加锁。
+- 详细契约、API 与限制：[`L8_SOCIAL_SCENE.md`](L8_SOCIAL_SCENE.md)。
+
+### L8.5 主动联系
+
+`proactive.py` 是引擎外的确定性调度层，只读 `actor.engine.state` 与关系快照：
+
+- `ProactiveConfig`：静默 / 冷却 / 每日 / 未回复 / 安静时段 / 阈值 / 权重；
+- `ProactiveScheduler`：`assess / evaluate / eligible / choose` 纯读；
+  `observe_turn` 记录活动，用户发言清空 `pending`；
+  `mark_contact` 仅更新调度状态；
+- urgency 由思念、静默、亲密、信任、熟悉、紧张、未回复线性组合；
+- 门控顺序固定：安静时段 → 最小静默 → 冷却 → 每日上限 → 未回复上限 → 阈值；
+- `FriendScene` 持有调度器，`record_turn()` 自动观察，`snapshot()` 增加
+  `proactive`；调度状态不持久化，关系仍持久化；
+- 发送由 `/api/scene/proactive` 触发：生成模板台词后走一次普通
+  `_scene_turn`，最后 `mark_contact`，因此不重复 tick；
+- 不新增 `tick()` 阶段、result / trace 键或 golden；
+- 详细契约、API 与限制：[`L8_5_PROACTIVE_CONTACT.md`](L8_5_PROACTIVE_CONTACT.md)。
 
 ## 4. 版本与迁移
 
@@ -182,7 +232,7 @@ coverage report
 
 ## 6. 修改某个 L 阶段时
 
-1. 先确认改动属于哪一层：纯公式（`core.py`）、控制层（`tolerance.py`）、观测层（`meta_emotion.py`）、记忆（`memory.py`）、表达（`expression.py`）、文本入口（`jev.py` / `noul.py`）、多角色感染（`contagion.py`）、协议外壳（`mcp_server.py`）、编排（`engine.py`）。
+1. 先确认改动属于哪一层：纯公式（`core.py`）、控制层（`tolerance.py`）、观测层（`meta_emotion.py`）、记忆（`memory.py`）、表达（`expression.py`）、文本入口（`jev.py` / `noul.py`）、多角色感染（`contagion.py`）、社交场景（`social.py`）、协议外壳（`mcp_server.py`）、编排（`engine.py`）。
 2. 如果改变默认曲线，增加 legacy 开关和前后对照测试；保留旧 golden。
 3. 如果新增返回字段，默认路径的键集合保持不变；需要时用独立开关控制。
 4. 如果新增持久化字段，同时更新快照 / 记忆 schema 版本与迁移测试。
@@ -191,8 +241,9 @@ coverage report
 
 ## 7. 已知边界
 
-- `engine.py` 仍是组合根，包含旧版内存 `MemoryStoreDB`、快照 SQLite 与 demo；后续可以继续拆，但不要为了“行数少”改变行为。
+- `engine.py` 仍是组合根，包含旧版内存 `MemoryStoreDB`、快照 SQLite 与 demo；后续可以继续拆，但不要为了“行数少”改变行为。单角色仪表盘已不再使用 `MemoryStoreDB`，持久记忆改走 `RelationshipMemoryStore`。
 - `dashboard/server.py` 仍读取 engine 的私有 `_dominant_channel`；它通过 re-export 工作，后续可改为公开接口。
+- `dashboard/server.py` 的 relationship store 与 `PeerRelationshipStore` 都是单连接；当前 `HTTPServer` 单线程处理请求，因此连接创建与使用在同一线程。若改成多线程服务器，需要给存储加锁或按线程建连接。
 - 测试中仍有直接访问私有成员的断言；这是为了锁定分阶段行为，不是对外 API 承诺。
-- 覆盖率 gate 只覆盖核心模块与 L6 的 `jev` / `noul` / `mcp_server`、L7 的 `contagion`；`dashboard` / `scripts` / `characters` 不做覆盖率门禁。
+- 覆盖率 gate 只覆盖核心模块与 L6 的 `jev` / `noul` / `mcp_server`、L7 的 `contagion`、L8 的 `social`、L8.5 的 `proactive`；`dashboard` / `scripts` / `characters` 不做覆盖率门禁。
 - JEV v0 是子串 / 词边界规则，不处理反讽、长距离指代与复杂否定；LLM 补充只做 JSON 夹取，不做多轮自我校验。

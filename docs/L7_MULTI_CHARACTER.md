@@ -1,8 +1,8 @@
-# L7：多角色情绪感染（v0 + v0.1 双向 + v0.2 自动关系 + v0.3 群体传播 + v0.4 方向关系）
+# L7：多角色情绪感染（v0 + v0.1 双向 + v0.2 自动关系 + v0.3 群体传播 + v0.4 方向关系 + 网页实验台）
 
 > 目标：让 A 的 `Appraisal` 成为 B 的有界输入，而不是让两个角色共享同一份情绪状态。
 >
-> 代码：`contagion.py` · 测试：`test_l7_contagion.py` + `test_l7_integration.py` + `test_l7_1_bidirectional.py` + `test_l7_2_relationship_model.py` + `test_l7_3_network.py` + `test_l7_4_directional.py` · 演示：`python scripts/multi_character_demo.py` / `python scripts/contagion_network_demo.py`
+> 代码：`contagion.py` · 测试：`test_l7_contagion.py` + `test_l7_integration.py` + `test_l7_1_bidirectional.py` + `test_l7_2_relationship_model.py` + `test_l7_3_network.py` + `test_l7_4_directional.py` + `test_contagion_dashboard.py` · 演示：`python scripts/multi_character_demo.py` / `python scripts/contagion_network_demo.py` · 网页：`dashboard/contagion.html`
 
 L7 v0 是**单向**感染：A 的事件评估 → B 的 appraisal 先验。B 仍使用自己的
 `Personality`、trust / love、耐受窗、伤疤和氛围计算情绪。
@@ -23,6 +23,10 @@ tick 之前算完，同一 tick 内仍然没有反馈环。
 L7.4 增加**方向性关系模型**：`DirectionalRelationship` 与
 `directional=True` 分别计算 A → B、B → A 的强度，纳入该方向发起角色的
 trust / love / familiarity 与 boundaries；方向强度不再被 pair 平均值抹平。
+
+网页实验台把上述模式接到 `dashboard/server.py`：`/contagion` 提供节点、
+关系、边权与全局参数编辑，`/api/contagion/*` 负责重建隔离引擎、逐轮 tick
+和 JEV 文本解析。实验台状态只存在内存中，不读写单角色仪表盘存档。
 
 ---
 
@@ -338,6 +342,10 @@ LLM 仍然只写 `utterance`，不写回通道或人格。
 - 记忆 schema 不变；`MEMORY_SCHEMA_VERSION` 仍为 1。
 - 旧版 `MemoryStoreDB`、伤疤存储没有角色身份，因此多角色场景不要共享
   这些对象；`ContagionPair` 与 `ContagionNetwork` 都会直接拒绝共享。
+- 单角色仪表盘已不再使用全局 `MemoryStoreDB`：持久记忆统一走
+  `RelationshipMemoryStore`，按 `(character_id, user_id)` 读写；未保存的
+  custom 角色使用 `custom:<name>` 作为记忆键。默认库是
+  `dashboard/_relationship_memory.db`，可用 `--memory-db` / `--user-id` 改写。
 - 共享 `Personality` 是允许的，因为感染只读人格、不写人格；但若希望两个
   角色有不同底色，应传入不同 `Personality`。
 - 方向性关系快照只读；自动 / 方向模型都不会写回 `state` 或关系存储。
@@ -359,6 +367,23 @@ joy / sadness / fear / trust；`--bidirectional` 同时对比 A 和 B 的双向�
 
 `contagion_network_demo.py` 演示 A → B → C 的两跳传播与 hop 衰减，
 再演示 A → B / B → A 强度不对称的方向性关系模型。
+
+网页实验台：
+
+```bash
+python dashboard/server.py --fresh --no-save
+# 浏览器打开 http://localhost:9020/contagion
+```
+
+页面预设：群体链 A→B→C、双向 A↔B、方向关系、全部中性。可编辑节点角色、
+trust / love / familiarity / boundaries、有向边与强度，以及 gain / cap /
+hop_decay / max_hops / 每步分钟；执行 1 tick 或连续 5 tick。每个节点卡片
+显示四维感染偏置、六条情绪条与相对初始状态的 delta；下方日志保留每轮记录。
+节点角色通过 JEV 解析事件文本后可直接填入六维 Appraisal 滑块。
+
+服务端在重建时为每个节点创建独立的 `MemoryStore` 与 `SensitizationStore`；
+配置签名变化时自动重建引擎，相同配置连续 tick 会累积状态。所有
+`/api/contagion/*` 响应只返回观测数据，不持久化。
 
 ## 7. 测试
 
@@ -389,13 +414,15 @@ python -m unittest test_l7_contagion.py test_l7_integration.py \
 - 方向强度公式、familiarity / boundaries 衰减、权重归一化与非法输入；
 - A→B / B→A 独立、显式关系覆盖 state、刷新、互斥参数、
   方向模型与网络边权组合；
-- 快照 / 记忆 schema 版本不变，感染不额外写记忆。
+- 快照 / 记忆 schema 版本不变，感染不额外写记忆；
+- 网页实验台的配置校验、网络 tick 与直接 `ContagionNetwork` 一致、
+  重建签名、节点隔离、pair 单 / 双向、方向强度、自动强度、cap 与 payload。
 
 当前：`test_l7_contagion.py` 14 个，`test_l7_integration.py` 13 个，
 `test_l7_1_bidirectional.py` 14 个，`test_l7_2_relationship_model.py` 14 个，
 `test_l7_3_network.py` 22 个，`test_l7_4_directional.py` 21 个，
-共 98 个 L7 测试；全量 436 tests OK；ruff clean；coverage 87%（branch，
-gate 80）；六套 golden 无 diff。
+`test_contagion_dashboard.py` 13 个，共 111 个 L7 测试；L8.5 后全量 513 tests OK；
+ruff clean；coverage 88%（branch，gate 80）；六套 golden 无 diff。
 
 ## 8. 限制与下一步
 
@@ -415,6 +442,8 @@ gate 80）；六套 golden 无 diff。
   最强路径；没有学习、最短路径优化或角色群体的全局归一化。
 - **感染源是输入 appraisal**：不是 A 的最终情绪；若需要“看到 A 的表情后
   被感染”，应由上游先构造 A 的表达 appraisal，再调用本模块。
+- **网页实验台是进程内状态**：多角色状态不写盘，重启服务器后回到预设；
+  同一配置连续 tick 会累积，修改配置会重建全部节点。
 - **版本说明**：设计纲领中的 v0.8 曾指“记忆显式化”，而 ROADMAP 当前
   v0.8 指多角色交互；本次按 ROADMAP 实现 L7 = v0.8 多角色
   v0 + v0.1 + v0.2 + v0.3 + v0.4，不声称完成设计纲领的全部 v0.8 记忆目标。

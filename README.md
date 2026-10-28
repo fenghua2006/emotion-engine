@@ -10,7 +10,7 @@ PAD（Pleasure-Arousal-Dominance, 1974）把情绪压缩成三维坐标中的单
 
 Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时存在，这是"苦涩的微笑"，不是一个坐标点。50 年后，该有人替代它了。
 
-## v0.8 架构
+## v0.8.5 架构
 
 ```
                     ┌──────────────┐
@@ -42,7 +42,7 @@ Emotion Engine 给每种情绪一个独立通道。joy=0.6 + sadness=0.5 同时�
 
 `tolerance.py` 不新增情绪通道，而是在每次 tick 后读取状态，决定下一 tick 是调节态、过度唤醒还是低唤醒。L5 默认把容量拆成愤怒 / 恐惧 / 亲密 / 批评四域，再取加权有效容量。
 
-底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；L7 增加多角色情绪感染（`contagion.py`，单向 + 双向 + 显式 / 自动关系强度 + 群体传播 + 方向性关系）。这些入口默认关闭，不改变默认曲线。
+底层公式已拆到 `core.py`：通道定义、弹性衰减、六维评估、门控、交互矩阵、慢通道生长。`engine.py` 只负责组合记忆 / 耐受 / 氛围 / 伤疤 / 表达。L6 在此之上增加文本入口（`jev.py` / `noul.py`）与 MCP 外壳（`mcp_server.py`）；L7 增加多角色情绪感染（`contagion.py`，单向 + 双向 + 显式 / 自动关系强度 + 群体传播 + 方向性关系）；L8 增加朋友圈场景（`social.py`，有向关系持久化 + 场景回合编排）；L8.5 增加主动联系调度（`proactive.py`，只读意愿评估 + 独立冷却 / 上限）。这些入口默认关闭，不改变默认曲线。
 
 ## 快速开始
 
@@ -64,18 +64,43 @@ uv run python dashboard/server.py --char furina
 uv run python dashboard/server.py --char kokomi
 uv run python dashboard/server.py --char columbina
 
+# 持久记忆：所有角色共享一个关系域库，但按 (character_id, user_id) 隔离
+uv run python dashboard/server.py --memory-db dashboard/_relationship_memory.db --user-id alice
+
 # 浏览器打开 http://localhost:9020
 # 网页内可热切换角色、发送事件、查看情绪折线历史
 # 耐受窗卡片展示 load / capacity / 四域容量，并按 zone 绘制区间带
+# 单角色仪表盘的持久记忆已统一到 RelationshipMemoryStore；
+# 未保存的 custom 角色按名字拆成 custom:<name>，不会共用同一记忆域。
+
+# L7 多角色感染实验台
+# http://localhost:9020/contagion
+# 预设：群体链 A→B→C / 双向 A↔B / 方向关系 / 全部中性
+# 可编辑节点关系、边权、gain / cap / hop_decay / max_hops，
+# 逐轮 tick 并查看每节点感染偏置、情绪条与感染日志。
+
+# L8 朋友圈场景
+# http://localhost:9020/scene
+# 2–4 个角色连续对话；关系按 (world_id, source, target) 持久化到 SQLite，
+# 感染边由关系强度推导，tension 会削弱传播。
+uv run python dashboard/server.py --social-db dashboard/_social_relationships.db
 ```
 
 API 端点（供外部接入）：
 | 端点 | 说明 |
 |---|---|
-| `GET /api/state` | 当前 10 通道 felt 值 + 氛围 + tolerance + dominant + 记忆 + 伤疤 |
+| `GET /api/state` | 当前 10 通道 felt 值 + 氛围 + tolerance + dominant + 记忆 + 伤疤；含 `memory_scope` 与关系域计数 |
 | `GET /api/history?n=120` | 最近 N 个数据点（情绪与 tolerance 折线用；含 zone / 四域容量） |
 | `POST /api/event` `{"text":"..."}` | 发送事件，引擎 tick |
 | `POST /api/switch` `{"character":"kokomi"}` | 热切换角色 |
+| `GET /api/contagion/state` | 当前多角色实验台状态 |
+| `POST /api/contagion/reset` `{"config":{...}}` | 按配置重建隔离引擎 |
+| `POST /api/contagion/tick` `{"config":{...},"appraisals":{...},"steps":1}` | 执行 1–20 轮感染 |
+| `POST /api/contagion/appraise` `{"text":"..."}` | 用 JEV 把文本解析成六维 Appraisal |
+| `GET /api/scene/state` | 当前朋友圈场景、有向关系、感染边与最近回合 |
+| `POST /api/scene/reset` `{"config":{...},"reset_relationships":false}` | 重建场景；可选清空当前世界的关系 |
+| `POST /api/scene/turn` `{"speaker_id":"user","text":"..."}` | 跑一个场景回合；角色发言时按关系传播偏置 |
+| `POST /api/scene/proactive` `{"action":"check"}` / `{"action":"send","actor_id":"B"}` | 检查 / 发送主动联系；发送会走一次普通场景回合 |
 
 ## 基本用法
 
@@ -117,10 +142,10 @@ trace = result["trace"]
 
 - `core.py` 不导入 `engine` / `atmosphere` / `tolerance` / `memory`，可以单独测试底层曲线。
 - `tick(trace=False)` 与原行为完全一致；`trace=True` 只增加观察快照。
-- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L7 后全量 436 tests。
+- 28 个核心测试锁住衰减、门控、慢通道、评估与 trace 行为；L8.5 后全量 513 tests。
 - 契约、分层规则与顺序问题（L3 已修）：[`docs/CORE.md`](docs/CORE.md)。
 - P0 可维护性：`tick()` 拆成有序 `_step_*`、表达层 / LLM 客户端分层、ruff + coverage + CI、快照 / 记忆 schema 版本与迁移点；见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
-- L0–L7 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
+- L0–L8 + L3.5 开发安排与验收：[`docs/INCREMENTAL_PLAN.md`](docs/INCREMENTAL_PLAN.md)。
 - 测试：`python -m unittest test_core_line.py -v`。
 
 ## L1 六条快通道（已完成）
@@ -132,7 +157,8 @@ trace = result["trace"]
 - 22 个 L1 测试 + 11 个交互语义测试；L2 完成后全量 134 tests，L3 完成后 166 tests，
   L3.5 完成后 191 tests，L5 校准核心完成后 229 tests，L5.1 表达/仪表盘后 241 tests，
   L4 记忆接入后 285 tests，L6 JEV / Noul / MCP 后 338 tests，
-  L7 情绪感染后 **436 tests, OK**。
+  L7 情绪感染与网页实验台后 455 tests，L8 朋友圈场景后 483 tests，
+  L8.5 主动联系后 **513 tests, OK**。
 - L1.1 修复：交互改为基线相对激活 + 快通道目标共激活；空闲 300 tick 六通道回到基线，纯负面事件不再凭空加 joy。旧行为由 `legacy_interactions=True` 和 legacy golden 保留。
 - 剩余已知问题：`dominant` 沿用“最高原始值 > 0.3”，joy 基线 0.35 造成基线偏差。
 - 生成 / 校验：`python scripts/generate_l1_golden.py [--check] [--legacy]`。
@@ -215,7 +241,7 @@ print(result["trace"]["meta_emotions"])
   `tolerance_load_bias` 作为有界附加负荷（≤0.2）进入 tolerance；默认关闭。
 - 同一 anger 的两种二阶态度：
   `uv run python characters/meta_emotion_demo.py` → shame/suppress vs pride/express。
-- 25 个 L3.5 测试；L7 后全量 **436 tests, OK**。
+- 25 个 L3.5 测试；L8.5 后全量 **513 tests, OK**。
 - 设计根因、文献地图、公式与验收：[`docs/META_EMOTION.md`](docs/META_EMOTION.md)。
 - L1 六通道 golden 测试不引入元情绪。
 
@@ -282,6 +308,7 @@ print(result["tolerance"])
 - L5.1 表达一致性：hyper 使用防御型本地台词与紧张 Live2D 表情；hypo 使用
   关机型台词与低唤醒表情，`_action_tendency` 同时压低趋近与回避。
 - 测试：`python -m unittest test_tolerance.py test_engine_tolerance.py test_l5_tolerance.py test_l5_1_expression_dashboard.py -v`。
+- 仪表盘关系域记忆隔离：`python -m unittest test_dashboard_memory.py -v`。
 - P0 护栏测试：`python -m unittest test_p0_maintainability.py -v`；lint / 覆盖率见 `docs/ARCHITECTURE.md`。
 - L5 golden：`python scripts/generate_l5_tolerance_golden.py --check`（legacy 加 `--legacy`）。
 - 完整公式、域系数、伤疤映射与限制：[`docs/TOLERANCE.md`](docs/TOLERANCE.md)。
@@ -315,7 +342,7 @@ print(result["_boundary"]) # violated / confidence / categories
 - 测试：`python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v`。
 - 详细契约：[`docs/JEV.md`](docs/JEV.md)、[`docs/MCP.md`](docs/MCP.md)。
 
-## L7 多角色情绪感染（v0 + v0.1 双向 + v0.2 自动关系 + v0.3 群体传播 + v0.4 方向关系）
+## L7 多角色情绪感染（v0 + v0.1 双向 + v0.2 自动关系 + v0.3 群体传播 + v0.4 方向关系 + 网页实验台）
 
 L7 让 A 的六维 `Appraisal` 成为 B 的**有界输入**，同时保持 B 自己的人格、
 信任、耐受窗、伤疤与氛围。v0 做单向 A → B；v0.1 增加双向 A ↔ B 与关系强度；
@@ -378,10 +405,89 @@ results = network.tick({"A": a_appraisal}, now=now)
   叠加；默认路径的 result / trace 键集合不变。
 - 感染只影响 appraisal，不写状态、记忆或 `Personality`；`ContagionPair` 与
   `ContagionNetwork` 都拒绝共享 `state` / `memory` / `scars` / `tolerance` 的引擎。
-- 测试：`python -m unittest test_l7_contagion.py test_l7_integration.py test_l7_1_bidirectional.py test_l7_2_relationship_model.py test_l7_3_network.py test_l7_4_directional.py -v`；
+- 网页实验台：运行 `python dashboard/server.py` 后打开
+  `http://localhost:9020/contagion`；页面提供群体链 / 双向 / 方向关系预设，
+  可编辑节点关系、边权与全局参数，执行 1 或 5 tick，并用 JEV 解析事件文本。
+  后端为每个节点创建独立 `MemoryStore` 与 `SensitizationStore`，不读写单角色存档。
+- 测试：`python -m unittest test_l7_contagion.py test_l7_integration.py test_l7_1_bidirectional.py test_l7_2_relationship_model.py test_l7_3_network.py test_l7_4_directional.py test_contagion_dashboard.py -v`；
   演示：`python scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`、
   `python scripts/contagion_network_demo.py`。
 - 详细设计、边界与后续计划：[`docs/L7_MULTI_CHARACTER.md`](docs/L7_MULTI_CHARACTER.md)。
+
+## L8 朋友圈场景（v0 + 网页实验台）
+
+L8 把 L7 的感染能力接成可连续对话的朋友圈：每个角色仍是隔离引擎，
+角色之间维护**有向关系**，关系强度决定感染边，回合结束后按听者的
+appraisal 更新“听者 → 发言者”的关系。
+
+```python
+from social import FriendScene, PeerRelationshipStore, SceneActor
+
+store = PeerRelationshipStore("dashboard/_social_relationships.db")
+scene = FriendScene(
+    [
+        SceneActor("A", "芙宁娜", engine_a, "furina"),
+        SceneActor("B", "心海", engine_b, "kokomi"),
+    ],
+    world_id="friends",
+    store=store,
+)
+
+# 角色 A 发言：只有 B 收到基于 A→B 关系强度的四维偏置
+biases = scene.biases_for("A", appraisal_a)
+
+# 每个角色用各自的引擎 tick 一次，生成台词
+# 回合结束后结算 B → A 的关系（用户发言不更新角色间关系）
+turn = scene.record_turn("A", {"A": appraisal_a, "B": appraisal_b})
+```
+
+- 关系键 `(world_id, source_id, target_id)`；A→B 与 B→A 完全独立。
+- 关系字段：`trust` / `love` / `familiarity` / `tension` / `boundaries` /
+  `summary` / `interactions`；SQLite 持久化，默认
+  `dashboard/_social_relationships.db`。
+- 感染边：`directional_relationship_strength(...) × (1 - 0.25 × tension)`；
+  关系越好传播越强，tension 越高传播越弱。
+- 关系更新公式是 v0 手调常数：valence 取
+  `0.5 × goal_conduciveness + 0.5 × social_evaluation`；
+  familiarity 随每次互动缓慢增长；越界额外扣 trust、加 tension。
+- `FriendScene` 拒绝共享 `state` / `memory` / `scars` / `tolerance`，
+  不写 `Personality`，不改变默认 tick，也不新增 golden。
+- 场景引擎的情绪状态**不持久化**；重启后关系保留，情绪回到构造时状态。
+- 网页：`python dashboard/server.py` → `http://localhost:9020/scene`；
+  可选 2–4 个角色、编辑世界 ID 与感染参数、连续对话并查看关系表。
+- 测试：`python -m unittest test_l8_scene.py test_scene_dashboard.py -v`
+  （15 + 13，共 28）。
+- 详细设计、API 与已知限制：[`docs/L8_SOCIAL_SCENE.md`](docs/L8_SOCIAL_SCENE.md)。
+
+## L8.5 主动联系（v0）
+
+`proactive.py` 是引擎外的确定性调度层：它只回答“现在谁最想主动找用户”，
+不推进 `tick()`、不写记忆 / 人格 / 关系。发送时才走一次普通场景回合。
+
+```python
+from proactive import ProactiveConfig, ProactiveScheduler
+
+scheduler = ProactiveScheduler(
+    scene.actors,
+    scene.relationship,
+    config=ProactiveConfig(threshold=0.35),
+)
+# 只读评估：不 tick、不改关系
+candidate = scheduler.choose()
+if candidate is not None:
+    receipt = scheduler.mark_contact(candidate)  # 仅更新调度状态
+```
+
+- 紧迫度：`0.35 × 思念 + 0.25 × 静默 + 0.20 × 亲密 + 0.10 × 信任
+  + 0.10 × 熟悉 − 0.25 × 紧张 − 0.20 × 未回复`，再截断到 `[0, 1]`。
+- 门控顺序：安静时段 → 最小静默 → 冷却 → 每日上限 → 未回复上限 → 阈值。
+- 用户发言清空所有角色的未回复计数；角色发言只更新活动时间。
+- `FriendScene.snapshot()` 新增 `proactive`；`record_turn()` 自动观察回合。
+- 网页 `/scene` 新增检查 / 发送按钮、候选表与主动联系参数；发送由模板台词
+  驱动，不调用 LLM，不额外 tick。
+- 测试：`python -m unittest test_l85_proactive.py test_proactive_dashboard.py -v`
+  （17 + 13，共 30）；L8.5 后全量 **513 tests, OK**。
+- 详细设计、API 与限制：[`docs/L8_5_PROACTIVE_CONTACT.md`](docs/L8_5_PROACTIVE_CONTACT.md)。
 
 ## 10 通道
 

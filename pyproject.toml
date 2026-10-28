@@ -1,6 +1,6 @@
 [project]
 name = "emotion-engine"
-version = "0.8.0.dev0"
+version = "0.8.5.dev0"
 description = "Multi-channel emotion dynamics engine for AI characters and NPCs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,6 +44,8 @@ source = [
     "memory",
     "meta_emotion",
     "noul",
+    "proactive",
+    "social",
     "tolerance",
 ]
 omit = [

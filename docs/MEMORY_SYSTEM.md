@@ -350,7 +350,25 @@ python scripts/migrate_legacy_memory.py \
   `skipped_duplicate`。
 - 旧库不会被删除；确认新库可读后再手动退役。
 
-### 6.4 schema 版本与迁移点
+### 6.4 仪表盘持久记忆
+
+单角色仪表盘不再创建全局 `MemoryStoreDB`。持久记忆统一由
+`RelationshipMemoryStore` 承担：
+
+- 默认库：`dashboard/_relationship_memory.db`；`--memory-db` 可改路径。
+- 作用域：每次读写都带 `(character_id, user_id)`；`--user-id` 默认 `dashboard`。
+- 角色键：内置/已保存角色用 `char_id`；未保存的自定义角色用
+  `custom:<name>`，不同名字不会共用同一记忆域。
+- `engine.memory` 只保留每引擎独立的进程内 `MemoryStore`，负责 flash /
+  long_term / short_term 工作记忆；它不再承担跨角色持久化。
+- `/api/event` 的本地模板路径手动取 `appraisal_prior` 并 `remember_turn`；
+  LLM 路径把同一个 `MemoryService` 交给 `respond_llm`，两条路径都会持久化。
+- `/api/state` 的 `memory` 字段新增 `relationship` 计数，并返回
+  `memory_scope.character_id` / `user_id` 便于核对隔离边界。
+- 旧 `dashboard/emotion.db` 不再被仪表盘读取；需要保留旧内容时用
+  `scripts/migrate_legacy_memory.py` 显式迁移。
+
+### 6.5 schema 版本与迁移点
 
 `memory.py` 用 SQLite `PRAGMA user_version` 记录表结构版本：
 
@@ -388,7 +406,7 @@ python scripts/migrate_legacy_memory.py \
 4. **先验依赖 appraisal 快照**：旧卡片只有 `emotion_snap` 时，`appraisal_prior()` 返回零；通道先验仍可用。
 5. **JEV 是规则 v0**：L6 的 `jev.py` 已能把文本转成 `Appraisal`（含低置信度回退），但反讽、长距离指代和复杂否定仍可能漏判；六维先验只在调用方显式传 `appraisal` 或开启 `use_jev` 时生效。
 6. **写入是同步的**：生产环境应挪到后台队列，避免阻塞回复。
-7. **新旧记忆库并存**：迁移工具已提供，但旧 `MemoryStoreDB` 仍保留；需要手动确认后退役。
+7. **新旧记忆库并存**：仪表盘已退役 `MemoryStoreDB`，但 `engine.py` 仍保留这个旧类供库/旧脚本使用；需要手动确认后彻底移除。
 8. **闸门是规则版**：没有学习式 novelty / future utility 判断，阈值是手工初值。
 
 ---
@@ -399,6 +417,7 @@ python scripts/migrate_legacy_memory.py \
 - [x] 关系摘要自动更新（确定性模板，每次成功写入后刷新）。
 - [x] 记忆写入闸门 v2：去重、冲突、时效、置信度、显式请求。
 - [x] 旧 `MemoryStoreDB` 迁移工具。
+- [x] 仪表盘持久记忆统一到 `RelationshipMemoryStore`（角色 × 用户隔离）。
 - [ ] v0.1.1：可选 LLM extractor（DeepSeek JSON），带 confidence 和 fallback。
 - [ ] 关系摘要升级为离线 LLM 叙事（每 N 轮 / 会话结束）。
 - [ ] 调试面板：查看某用户的关系摘要、事实、卡片、开放循环。
@@ -433,5 +452,6 @@ python -m unittest test_l4_memory_integration.py -v
 
 - `test_memory_system.py`：19
 - `test_l4_memory_integration.py`：27
+- `test_dashboard_memory.py`：6（仪表盘角色 × 用户隔离）
 - L6 记忆相关：`test_l6_mcp.py` 的 `recall` / `state` 工具测试
-- 全套：436 tests OK（L7.4 后）
+- 全套：513 tests OK（L8.5 主动联系后）

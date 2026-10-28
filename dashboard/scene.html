@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>朋友圈 · Emotion Engine L8</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --line: #2d3748;
+    --text: #d7e0ea;
+    --muted: #8796a8;
+    --accent: #63b3ed;
+    --accent-2: #b794f4;
+    --good: #68d391;
+    --bad: #f6ad55;
+    --danger: #fc8181;
+    --joy: #f0b95e;
+    --sadness: #6b8dd6;
+    --anger: #d96a6a;
+    --fear: #9b7bd6;
+    --love: #d48bb8;
+    --trust: #68d391;
+    --disgust: #9a9a6b;
+    --surprise: #63c7c7;
+    --guilt: #b58a6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(circle at 18% 0%, #1b2233 0, var(--bg) 42%);
+    color: var(--text);
+    font: 13px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+  button, select, input, textarea { font: inherit; }
+  button {
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 11px;
+    transition: .15s border-color, .15s background, .15s transform;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); background: #223049; }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: linear-gradient(135deg, #2b6cb0, #6b46c1);
+    border-color: #4c51bf;
+    color: #fff;
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { filter: brightness(1.15); }
+  button.ghost { background: transparent; }
+  button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+  select, input[type="number"], input[type="text"], textarea {
+    background: #0f1621;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 6px 8px;
+    outline: none;
+    min-width: 0;
+  }
+  select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; width: 100%; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: rgba(13, 17, 23, .9);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .3px; white-space: nowrap; }
+  .badge {
+    font-size: 11px;
+    color: #9ae6b4;
+    background: rgba(72, 187, 120, .11);
+    border: 1px solid rgba(72, 187, 120, .35);
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  header .spacer { flex: 1; }
+  header .links { display: flex; gap: 10px; font-size: 12px; white-space: nowrap; }
+  #status { color: var(--muted); font-size: 12px; max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.error { color: var(--danger); }
+  #status.ok { color: var(--good); }
+  #status.busy { color: var(--bad); }
+
+  main {
+    display: grid;
+    grid-template-columns: 350px minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px 20px 48px;
+    align-items: start;
+  }
+  @media (max-width: 1000px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .panel, .card {
+    background: linear-gradient(180deg, rgba(28, 35, 48, .94), rgba(22, 27, 34, .94));
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  }
+  .panel { padding: 12px; }
+  .card { padding: 12px; min-width: 0; }
+  .panel > .card + .card { margin-top: 12px; }
+  .card h2, .panel h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .stack > * + * { margin-top: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .field { color: var(--muted); font-size: 11px; }
+  .field input, .field select { width: 100%; margin-top: 2px; }
+  .muted { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+  .hint.warn { color: var(--bad); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .actions button { flex: 1; min-width: 100px; }
+  .check-row { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 11px; }
+  .check-row input { accent-color: var(--accent); }
+
+  .actor-row {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr) 30px;
+    gap: 6px;
+    align-items: center;
+    margin-top: 7px;
+  }
+  .actor-row input { width: 100%; text-align: center; font-weight: 700; color: var(--accent); }
+  .actor-row select { width: 100%; }
+  .actor-row .remove { padding: 4px 6px; color: var(--muted); }
+  #add-actor { width: 100%; margin-top: 8px; }
+
+  .output { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .summary-card { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .summary-card h2 { margin: 0 10px 0 0; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, .025);
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip strong { color: var(--text); font-weight: 600; }
+  .chip.bias { border-color: rgba(99, 179, 237, .35); color: #90cdf4; }
+
+  #actor-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+    gap: 12px;
+  }
+  .actor-card { position: relative; overflow: hidden; padding: 13px; }
+  .actor-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--accent);
+    opacity: .8;
+  }
+  .actor-head { display: flex; align-items: baseline; gap: 8px; }
+  .actor-id {
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--accent);
+  }
+  .actor-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dominant {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .06);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .actor-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+  .meta-chip {
+    font-size: 10px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1px 5px;
+  }
+  .meta-chip.hot { color: var(--danger); border-color: rgba(252, 129, 129, .4); }
+  .utterance {
+    min-height: 34px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: rgba(99, 179, 237, .06);
+    border: 1px solid rgba(99, 179, 237, .16);
+    color: #c6e2fa;
+    font-size: 12px;
+    margin-bottom: 9px;
+  }
+  .utterance.empty { color: var(--muted); background: rgba(255, 255, 255, .02); border-color: var(--line); }
+  .channels { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 9px; }
+  .channel-row {
+    display: grid;
+    grid-template-columns: 48px 1fr 34px;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+  }
+  .channel-row .label { color: var(--muted); }
+  .channel-row .value { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar-track { height: 5px; background: #0b111a; border-radius: 999px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+  .bar-fill.joy { background: var(--joy); }
+  .bar-fill.sadness { background: var(--sadness); }
+  .bar-fill.anger { background: var(--anger); }
+  .bar-fill.fear { background: var(--fear); }
+  .bar-fill.love { background: var(--love); }
+  .bar-fill.trust { background: var(--trust); }
+  .bar-fill.disgust { background: var(--disgust); }
+  .bar-fill.surprise { background: var(--surprise); }
+  .bar-fill.guilt { background: var(--guilt); }
+  .bias-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .bias-chip {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: rgba(99, 179, 237, .08);
+    border: 1px solid rgba(99, 179, 237, .22);
+    color: #bee3f8;
+    font-variant-numeric: tabular-nums;
+  }
+  .bias-empty { color: var(--muted); font-size: 10px; margin-top: 8px; }
+
+  .chat-card { display: flex; flex-direction: column; }
+  #chat {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-height: 120px;
+    max-height: 440px;
+    overflow-y: auto;
+    padding-right: 3px;
+  }
+  .msg {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(15, 22, 33, .68);
+    padding: 9px 11px;
+  }
+  .msg.user { border-color: rgba(183, 148, 244, .4); background: rgba(183, 148, 244, .06); }
+  .msg-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-bottom: 3px; }
+  .msg .who { font-weight: 700; color: var(--accent); }
+  .msg.user .who { color: var(--accent-2); }
+  .msg .turn { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .msg-text { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+  .appraisal-line { color: var(--muted); font-size: 10px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .reply-list { display: flex; flex-direction: column; gap: 4px; margin-top: 7px; padding-top: 7px; border-top: 1px dashed rgba(45, 55, 72, .8); }
+  .reply { display: grid; grid-template-columns: 76px 1fr; gap: 7px; font-size: 11px; }
+  .reply .who { color: #9fe7b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply .say { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .rel-change-line { color: var(--muted); font-size: 10px; margin-top: 6px; }
+  .rel-change-line strong { color: var(--bad); font-weight: 600; }
+  .empty { color: var(--muted); padding: 14px 0; text-align: center; }
+
+  .composer { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
+  .composer-top { display: flex; gap: 8px; align-items: center; }
+  .composer-top select { min-width: 150px; }
+  .composer-row { display: flex; align-items: center; gap: 10px; }
+  .composer-row .count { color: var(--muted); font-size: 10px; flex: 1; font-variant-numeric: tabular-nums; }
+  .composer-row button { min-width: 150px; }
+
+  .relationship-card h2 { margin-bottom: 6px; }
+  .rel-table-wrap { overflow-x: auto; margin-top: 9px; }
+  table.rel-table { border-collapse: collapse; width: 100%; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .rel-table th, .rel-table td {
+    border-bottom: 1px solid rgba(45, 55, 72, .7);
+    padding: 5px 7px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .rel-table th { color: var(--muted); font-weight: 600; text-align: right; }
+  .rel-table th:first-child, .rel-table td:first-child { text-align: left; }
+  .rel-table tr:last-child td { border-bottom: 0; }
+  .rel-table .pair { color: var(--text); }
+  .rel-table .pair .arrow { color: var(--muted); }
+  .rel-table .tension.hot { color: var(--danger); font-weight: 700; }
+  .rel-table .interactions { color: var(--muted); }
+  .rel-table .boundary { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  #edges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+  .proactive-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 8px;
+    border-bottom: 1px solid rgba(45, 55, 72, .7);
+  }
+  .proactive-row:last-child { border-bottom: 0; }
+  .proactive-row .who { font-weight: 700; color: var(--accent); min-width: 88px; }
+  .proactive-row .why { color: var(--muted); font-size: 10px; flex: 1; min-width: 140px; }
+  .chip.ok { color: var(--good); border-color: rgba(104, 211, 145, .4); }
+  .chip.wait { color: var(--bad); border-color: rgba(246, 173, 85, .4); }
+  #proactive-summary { margin-top: 9px; }
+  .proactive-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; margin-top: 9px; }
+
+  @media (max-width: 620px) {
+    header { padding: 10px 12px; flex-wrap: wrap; }
+    header h1 { font-size: 14px; }
+    header .links { width: 100%; }
+    #status { max-width: 100%; }
+    main { padding: 12px; }
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+    .composer-row { flex-wrap: wrap; }
+    .channels { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>👥 朋友圈</h1>
+  <span class="badge">L8 v0 · 关系场景</span>
+  <div class="spacer"></div>
+  <span id="status">正在连接…</span>
+  <div class="links">
+    <a href="/contagion">🕸️ 感染实验台</a>
+    <a href="/">← 单角色仪表盘</a>
+  </div>
+</header>
+
+<main>
+  <aside class="panel">
+    <section class="card">
+      <h2>场景配置</h2>
+      <div class="stack">
+        <label class="field">世界 / 群聊 ID
+          <input id="world-id" type="text" maxlength="64" value="dashboard">
+        </label>
+        <div>
+          <h2 style="margin-top:4px">角色 <span class="muted" id="actor-count"></span></h2>
+          <div id="actor-rows"></div>
+          <button id="add-actor" class="ghost" type="button">+ 添加角色（最多 4 个）</button>
+        </div>
+        <div class="grid-4">
+          <label class="field">gain
+            <input id="gain" type="number" min="0" max="1" step="0.01" value="0.2">
+          </label>
+          <label class="field">cap
+            <input id="cap" type="number" min="0" max="0.2" step="0.01" value="0.08">
+          </label>
+          <label class="field">hop_decay
+            <input id="hop-decay" type="number" min="0" max="1" step="0.05" value="0.5">
+          </label>
+          <label class="field">max_hops
+            <input id="max-hops" type="number" min="1" max="8" step="1" value="2">
+          </label>
+        </div>
+        <div>
+          <h2 style="margin-top:4px">主动联系</h2>
+          <div class="grid-2">
+            <label class="field">threshold 意愿阈值
+              <input id="proactive-threshold" type="number" min="0" max="1" step="0.05" value="0.35">
+            </label>
+            <label class="field">min silence（分钟）
+              <input id="proactive-min-silence" type="number" min="0" step="1" value="30">
+            </label>
+            <label class="field">absence window（分钟）
+              <input id="proactive-window" type="number" min="1" step="1" value="180">
+            </label>
+            <label class="field">cooldown（分钟）
+              <input id="proactive-cooldown" type="number" min="0" step="1" value="360">
+            </label>
+            <label class="field">每日上限
+              <input id="proactive-daily" type="number" min="0" max="20" step="1" value="2">
+            </label>
+            <label class="field">未回复上限
+              <input id="proactive-unanswered" type="number" min="0" max="10" step="1" value="2">
+            </label>
+            <label class="field">安静开始（0–23，空=关）
+              <input id="proactive-quiet-start" type="number" min="0" max="23" step="1" value="23">
+            </label>
+            <label class="field">安静结束（0–23，空=关）
+              <input id="proactive-quiet-end" type="number" min="0" max="23" step="1" value="7">
+            </label>
+          </div>
+        </div>
+        <label class="check-row">
+          <input id="reset-relationships" type="checkbox">
+          重建时同时清空本世界的角色关系
+        </label>
+        <div class="actions">
+          <button id="apply" class="primary" type="button">应用并重建</button>
+          <button id="refresh" type="button">刷新状态</button>
+        </div>
+        <div class="hint" id="config-hint">修改配置后先点“应用并重建”。</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>这一层在做什么</h2>
+      <div class="hint">
+        每个角色拥有完全隔离的引擎与记忆。角色发言时，只有其他角色会收到
+        基于有向关系的四维感染偏置；回合结束后，听者按自己对这句话的
+        appraisal 更新“听者 → 发言者”的 trust / love / familiarity /
+        tension。用户发言不更新角色间关系。<br><br>
+        tension 越高，感染边越弱；所有偏置仍在 tick 前一次性算完。
+      </div>
+    </section>
+  </aside>
+
+  <section class="output">
+    <div class="card summary-card">
+      <h2>场景概览</h2>
+      <span class="chip">world <strong id="world-chip">—</strong></span>
+      <span class="chip">turn <strong id="turn-chip">0</strong></span>
+      <span class="chip">actors <strong id="actor-chip">—</strong></span>
+      <div id="edge-chips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+    </div>
+
+    <div id="actor-cards">
+      <div class="card empty">正在加载场景…</div>
+    </div>
+
+    <div class="card chat-card">
+      <h2>对话</h2>
+      <div id="chat"><div class="empty">发送第一句话，看看朋友们如何互相影响。</div></div>
+      <div class="composer">
+        <div class="composer-top">
+          <label class="field" style="flex:0 0 auto">发言者
+            <select id="speaker"></select>
+          </label>
+        </div>
+        <textarea id="text" rows="3" maxlength="2000" placeholder="说点什么……例如：我今天升职了，但有点担心新岗位。"></textarea>
+        <div class="composer-row">
+          <span class="count" id="text-count">0 / 2000</span>
+          <button id="send" class="primary" type="button">发送并结算</button>
+        </div>
+        <div class="hint">Enter 发送，Shift+Enter 换行。文本会先经过 JEV 解析为六维 appraisal。</div>
+      </div>
+    </div>
+
+    <div class="card proactive-card">
+      <h2>主动联系</h2>
+      <div class="hint">
+        主动联系不进入 tick：调度器只读角色当前情绪、静默时长、冷却、每日与
+        未回复上限，算出一个 urgency。真正发送时才走一次普通场景回合；
+        用户回复会清空未回复计数。
+      </div>
+      <div class="proactive-actions">
+        <button id="proactive-check" type="button">检查意愿</button>
+        <button id="proactive-send" class="primary" type="button">发送给最想联系的人</button>
+      </div>
+      <label class="field" style="margin-top:9px">指定角色（可选）
+        <select id="proactive-actor"><option value="">自动选择</option></select>
+      </label>
+      <div id="proactive-summary" class="hint">尚未检查。</div>
+      <div id="proactive-list"></div>
+    </div>
+
+    <div class="card relationship-card">
+      <h2>有向关系</h2>
+      <div class="hint">行 = 感受者，列 = 对象。关系来自本世界已持久化的回合结算；箭头方向表示感染边。</div>
+      <div class="rel-table-wrap" id="relationships"></div>
+      <div id="edges"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const ACTOR_LIMIT = 4;
+  const ACTOR_MIN = 2;
+  const CHANNELS = [
+    "joy", "sadness", "anger", "fear", "love",
+    "trust", "disgust", "surprise", "guilt",
+  ];
+  const PROACTIVE_REASONS = {
+    longing: "思念",
+    absence: "安静太久",
+    love: "亲密",
+    trust: "信任",
+    familiarity: "熟悉",
+    tension: "紧张",
+    unanswered: "未回复",
+  };
+  const PROACTIVE_BLOCKS = {
+    quiet_hours: "安静时段",
+    min_silence: "静默不足",
+    cooldown: "冷却中",
+    daily_limit: "今日已满",
+    unanswered_limit: "未回复太多",
+    below_threshold: "意愿不足",
+  };
+
+  const ui = {
+    state: null,
+    characters: [],
+    dirty: false,
+    busy: false,
+    latest: {},
+  };
+
+  function fmt(value, digits = 2) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "—";
+    return number.toFixed(digits);
+  }
+
+  function clamp01(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.max(0, Math.min(1, number));
+  }
+
+  function setStatus(message, kind = "") {
+    const node = $("status");
+    node.textContent = message;
+    node.className = kind;
+  }
+
+  function api(path, options) {
+    const opts = Object.assign({ headers: { "Content-Type": "application/json" } }, options || {});
+    return fetch(path, opts).then(async (response) => {
+      const raw = await response.text();
+      let data = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch (_) { data = null; }
+      if (!response.ok) {
+        const detail = data && data.error ? data.error : response.statusText;
+        throw new Error(detail || `HTTP ${response.status}`);
+      }
+      if (data === null) throw new Error("服务器返回了空响应");
+      return data;
+    });
+  }
+
+  function actorName(actorId) {
+    if (actorId === "user") return "你";
+    const actor = ui.state && ui.state.actors ? ui.state.actors[actorId] : null;
+    return actor ? `${actor.name}` : actorId;
+  }
+
+  function actorLabel(actorId) {
+    if (actorId === "user") return "你";
+    const name = actorName(actorId);
+    return name === actorId ? actorId : `${name}（${actorId}）`;
+  }
+
+  function characterOptions(selected) {
+    const select = document.createElement("select");
+    const seen = new Set();
+    ui.characters.forEach((character) => {
+      if (seen.has(character.id)) return;
+      seen.add(character.id);
+      const option = document.createElement("option");
+      option.value = character.id;
+      option.textContent = character.builtin
+        ? `${character.name} · ${character.id}`
+        : `${character.name} · ${character.id}（自定义）`;
+      select.appendChild(option);
+    });
+    if (selected && !seen.has(selected)) {
+      const option = document.createElement("option");
+      option.value = selected;
+      option.textContent = selected;
+      select.appendChild(option);
+    }
+    select.value = selected || (ui.characters[0] && ui.characters[0].id) || "default";
+    return select;
+  }
+
+  function currentActorRows() {
+    return Array.from(document.querySelectorAll("#actor-rows .actor-row"));
+  }
+
+  function markDirty() {
+    ui.dirty = true;
+    $("config-hint").textContent = "配置已修改，点击“应用并重建”后生效。";
+    $("config-hint").className = "hint warn";
+  }
+
+  function setClean() {
+    ui.dirty = false;
+    $("config-hint").textContent = "配置已应用。关系保存在本世界 ID 下。";
+    $("config-hint").className = "hint";
+  }
+
+  function nextActorId(rows) {
+    const used = new Set(rows.map((row) => row.querySelector(".actor-id").value.trim()));
+    for (const letter of "ABCDEFGH") {
+      if (!used.has(letter)) return letter;
+    }
+    let index = 1;
+    while (used.has(`N${index}`)) index += 1;
+    return `N${index}`;
+  }
+
+  function firstUnusedCharacter(rows) {
+    const used = new Set(rows.map((row) => row.querySelector(".actor-char").value));
+    const fallback = (ui.characters[0] && ui.characters[0].id) || "default";
+    const found = ui.characters.find((character) => !used.has(character.id));
+    return found ? found.id : fallback;
+  }
+
+  function addActorRow(config) {
+    const rows = currentActorRows();
+    if (rows.length >= ACTOR_LIMIT) return;
+    const actorId = config && config.id ? config.id : nextActorId(rows);
+    const character = config && config.character ? config.character : firstUnusedCharacter(rows);
+    const row = document.createElement("div");
+    row.className = "actor-row";
+
+    const idInput = document.createElement("input");
+    idInput.className = "actor-id";
+    idInput.type = "text";
+    idInput.maxLength = 12;
+    idInput.value = actorId;
+    idInput.title = "场景内角色 ID";
+    idInput.addEventListener("input", markDirty);
+
+    const select = characterOptions(character);
+    select.className = "actor-char";
+    select.addEventListener("change", markDirty);
+
+    const remove = document.createElement("button");
+    remove.className = "remove ghost";
+    remove.type = "button";
+    remove.textContent = "✕";
+    remove.title = "移除角色";
+    remove.addEventListener("click", () => {
+      if (currentActorRows().length <= ACTOR_MIN) {
+        setStatus(`至少保留 ${ACTOR_MIN} 个角色`, "error");
+        return;
+      }
+      row.remove();
+      refreshActorControls();
+      markDirty();
+    });
+
+    row.append(idInput, select, remove);
+    $("actor-rows").appendChild(row);
+    refreshActorControls();
+  }
+
+  function refreshActorControls() {
+    const rows = currentActorRows();
+    $("actor-count").textContent = `${rows.length} / ${ACTOR_LIMIT}`;
+    rows.forEach((row) => {
+      row.querySelector(".remove").disabled = rows.length <= ACTOR_MIN;
+    });
+    $("add-actor").disabled = rows.length >= ACTOR_LIMIT;
+  }
+
+  function renderActorRows(actors) {
+    $("actor-rows").textContent = "";
+    (actors || []).slice(0, ACTOR_LIMIT).forEach(addActorRow);
+    refreshActorControls();
+  }
+
+  function readConfig() {
+    const rows = currentActorRows();
+    const seen = new Set();
+    const actors = rows.map((row, index) => {
+      const actorId = row.querySelector(".actor-id").value.trim();
+      if (!actorId) throw new Error(`第 ${index + 1} 个角色的 ID 不能为空`);
+      if (seen.has(actorId)) throw new Error(`角色 ID 重复：${actorId}`);
+      seen.add(actorId);
+      return {
+        id: actorId,
+        character: row.querySelector(".actor-char").value,
+      };
+    });
+    if (actors.length < ACTOR_MIN) throw new Error(`至少需要 ${ACTOR_MIN} 个角色`);
+    if (actors.length > ACTOR_LIMIT) throw new Error(`最多 ${ACTOR_LIMIT} 个角色`);
+    return {
+      world_id: $("world-id").value.trim() || "dashboard",
+      gain: Number($("gain").value),
+      cap: Number($("cap").value),
+      hop_decay: Number($("hop-decay").value),
+      max_hops: Number($("max-hops").value),
+      actors,
+      proactive: readProactiveConfig(),
+    };
+  }
+
+  function numericValue(id, fallback) {
+    const value = Number($(id).value);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function hourValue(id) {
+    const raw = $(id).value.trim();
+    if (raw === "") return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function readProactiveConfig() {
+    const current = (ui.state && ui.state.config && ui.state.config.proactive) || {};
+    return Object.assign({}, current, {
+      min_silence_seconds: numericValue("proactive-min-silence", 30) * 60,
+      silence_window_seconds: numericValue("proactive-window", 180) * 60,
+      cooldown_seconds: numericValue("proactive-cooldown", 360) * 60,
+      max_per_day: numericValue("proactive-daily", 2),
+      max_unanswered: numericValue("proactive-unanswered", 2),
+      quiet_start_hour: hourValue("proactive-quiet-start"),
+      quiet_end_hour: hourValue("proactive-quiet-end"),
+      threshold: numericValue("proactive-threshold", 0.35),
+    });
+  }
+
+  function fillProactiveConfig(config) {
+    const proactive = (config && config.proactive) || {};
+    const scalar = (value, fallback) => value === undefined || value === null ? fallback : value;
+    const hours = (value) => value === undefined || value === null ? "" : value;
+    $("proactive-threshold").value = scalar(proactive.threshold, 0.35);
+    $("proactive-min-silence").value = scalar(proactive.min_silence_seconds, 1800) / 60;
+    $("proactive-window").value = scalar(proactive.silence_window_seconds, 10800) / 60;
+    $("proactive-cooldown").value = scalar(proactive.cooldown_seconds, 21600) / 60;
+    $("proactive-daily").value = scalar(proactive.max_per_day, 2);
+    $("proactive-unanswered").value = scalar(proactive.max_unanswered, 2);
+    $("proactive-quiet-start").value = hours(proactive.quiet_start_hour);
+    $("proactive-quiet-end").value = hours(proactive.quiet_end_hour);
+  }
+
+  function fillConfig(config) {
+    if (!config) return;
+    $("world-id").value = config.world_id || "dashboard";
+    $("gain").value = config.gain;
+    $("cap").value = config.cap;
+    $("hop-decay").value = config.hop_decay;
+    $("max-hops").value = config.max_hops;
+    renderActorRows(config.actors);
+    fillProactiveConfig(config);
+  }
+
+  function renderSpeakerSelect() {
+    const select = $("speaker");
+    const previous = select.value || "user";
+    select.textContent = "";
+    const user = document.createElement("option");
+    user.value = "user";
+    user.textContent = "你 · user";
+    select.appendChild(user);
+    const order = (ui.state && ui.state.actor_order) || [];
+    order.forEach((actorId) => {
+      const option = document.createElement("option");
+      option.value = actorId;
+      option.textContent = actorLabel(actorId);
+      select.appendChild(option);
+    });
+    if (Array.from(select.options).some((option) => option.value === previous)) {
+      select.value = previous;
+    } else {
+      select.value = "user";
+    }
+  }
+
+  function latestUtterancesFromLog(log) {
+    const latest = {};
+    (log || []).forEach((entry) => {
+      Object.entries(entry.utterances || {}).forEach(([actorId, utterance]) => {
+        latest[actorId] = utterance;
+      });
+    });
+    return latest;
+  }
+
+  function renderActorCards(actors, latest) {
+    const host = $("actor-cards");
+    host.textContent = "";
+    const order = (ui.state && ui.state.actor_order) || Object.keys(actors || {});
+    if (!order.length) {
+      host.innerHTML = '<div class="card empty">还没有角色。</div>';
+      return;
+    }
+    order.forEach((actorId) => {
+      const actor = actors && actors[actorId];
+      if (!actor) return;
+      const card = document.createElement("div");
+      card.className = "card actor-card";
+
+      const head = document.createElement("div");
+      head.className = "actor-head";
+      const id = document.createElement("span");
+      id.className = "actor-id";
+      id.textContent = actorId;
+      const name = document.createElement("span");
+      name.className = "actor-name";
+      name.textContent = actor.name || actorId;
+      const dominant = document.createElement("span");
+      dominant.className = "dominant";
+      dominant.textContent = actor.dominant || "neutral";
+      head.append(id, name, dominant);
+
+      const meta = document.createElement("div");
+      meta.className = "actor-meta";
+      if (actor.character_id) {
+        const character = document.createElement("span");
+        character.className = "meta-chip";
+        character.textContent = `角色 ${actor.character_id}`;
+        meta.appendChild(character);
+      }
+      if (actor.zone) {
+        const zone = document.createElement("span");
+        zone.className = `meta-chip${actor.zone !== "regulated" ? " hot" : ""}`;
+        zone.textContent = `zone ${actor.zone}`;
+        meta.appendChild(zone);
+      }
+      if (actor.needs_llm) {
+        const llm = document.createElement("span");
+        llm.className = "meta-chip hot";
+        llm.textContent = "建议 LLM";
+        meta.appendChild(llm);
+      }
+      if (actor.action) {
+        const action = document.createElement("span");
+        action.className = "meta-chip";
+        action.textContent = `action ${actor.action}`;
+        meta.appendChild(action);
+      }
+
+      const utterance = document.createElement("div");
+      const text = latest[actorId] || actor.utterance || "";
+      utterance.className = `utterance${text ? "" : " empty"}`;
+      utterance.textContent = text || "还没有台词。";
+
+      const channels = document.createElement("div");
+      channels.className = "channels";
+      const felt = actor.felt || {};
+      CHANNELS.forEach((channel) => {
+        const value = clamp01(felt[channel] || 0);
+        const row = document.createElement("div");
+        row.className = "channel-row";
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = channel;
+        const track = document.createElement("span");
+        track.className = "bar-track";
+        const fill = document.createElement("span");
+        fill.className = `bar-fill ${channel}`;
+        fill.style.width = `${(value * 100).toFixed(1)}%`;
+        track.appendChild(fill);
+        const number = document.createElement("span");
+        number.className = "value";
+        number.textContent = fmt(value, 2);
+        row.append(label, track, number);
+        channels.appendChild(row);
+      });
+
+      const biasBox = document.createElement("div");
+      biasBox.className = "bias-list";
+      const bias = actor.contagion_bias || {};
+      const biasEntries = Object.entries(bias);
+      if (biasEntries.length) {
+        biasEntries.forEach(([dimension, value]) => {
+          const chip = document.createElement("span");
+          chip.className = "bias-chip";
+          chip.textContent = `${dimension} ${Number(value) >= 0 ? "+" : ""}${fmt(value, 4)}`;
+          biasBox.appendChild(chip);
+        });
+      } else {
+        const empty = document.createElement("div");
+        empty.className = "bias-empty";
+        empty.textContent = actorId === (ui.state && ui.state.lastSource) ? "发言者不接收自身感染" : "本轮无感染偏置";
+        biasBox.appendChild(empty);
+      }
+
+      card.append(head, meta, utterance, channels, biasBox);
+      host.appendChild(card);
+    });
+  }
+
+  function proactiveReasonText(item) {
+    const reasons = (item.reasons || []).map((key) => PROACTIVE_REASONS[key] || key);
+    if (reasons.length) return reasons.join(" · ");
+    return "无明显正向信号";
+  }
+
+  function renderProactive(snapshot, chosen) {
+    const data = snapshot || (ui.state && ui.state.proactive) || {};
+    const assessments = data.actors || {};
+    const order = (ui.state && ui.state.actor_order) || Object.keys(assessments);
+
+    const select = $("proactive-actor");
+    const previous = select.value;
+    select.textContent = "";
+    const auto = document.createElement("option");
+    auto.value = "";
+    auto.textContent = "自动选择";
+    select.appendChild(auto);
+    order.forEach((actorId) => {
+      const option = document.createElement("option");
+      option.value = actorId;
+      option.textContent = actorLabel(actorId);
+      select.appendChild(option);
+    });
+    if (Array.from(select.options).some((option) => option.value === previous)) {
+      select.value = previous;
+    }
+
+    const host = $("proactive-list");
+    host.textContent = "";
+    let best = chosen && chosen.actor_id ? chosen : null;
+    if (!best) {
+      order.forEach((actorId) => {
+        const item = assessments[actorId];
+        if (item && item.eligible && (!best || item.urgency > best.urgency)) {
+          best = item;
+        }
+      });
+    }
+
+    const summary = $("proactive-summary");
+    if (best) {
+      summary.className = "hint";
+      summary.textContent =
+        `当前最想联系：${actorLabel(best.actor_id)} · urgency ${fmt(best.urgency, 3)} · ` +
+        proactiveReasonText(best);
+    } else if (Object.keys(assessments).length) {
+      summary.className = "hint warn";
+      summary.textContent = "当前没有角色达到主动联系条件。";
+    } else {
+      summary.className = "hint";
+      summary.textContent = "尚未检查。";
+    }
+
+    if (!order.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "还没有角色。";
+      host.appendChild(empty);
+      return;
+    }
+    order.forEach((actorId) => {
+      const item = assessments[actorId];
+      if (!item) return;
+      const row = document.createElement("div");
+      row.className = "proactive-row";
+
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = actorLabel(actorId);
+
+      const urgency = document.createElement("span");
+      urgency.className = "chip";
+      urgency.textContent = `urgency ${fmt(item.urgency, 3)}`;
+
+      const state = document.createElement("span");
+      state.className = `chip ${item.eligible ? "ok" : "wait"}`;
+      state.textContent = item.eligible
+        ? "可主动联系"
+        : (PROACTIVE_BLOCKS[item.blocked_reason] || item.blocked_reason || "不可用");
+
+      const why = document.createElement("span");
+      why.className = "why";
+      why.textContent = proactiveReasonText(item);
+
+      row.append(who, urgency, state, why);
+      if (Number(item.pending || 0) > 0) {
+        const pending = document.createElement("span");
+        pending.className = "chip";
+        pending.textContent = `未回复 ${item.pending}`;
+        row.appendChild(pending);
+      }
+      host.appendChild(row);
+    });
+  }
+
+  function renderRelationships(snapshot) {
+    const host = $("relationships");
+    host.textContent = "";
+    const order = (snapshot && snapshot.actor_order) || [];
+    const relationships = (snapshot && snapshot.relationships) || {};
+    if (order.length < 2) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "至少需要两个角色才能形成关系。";
+      host.appendChild(empty);
+    } else {
+      const table = document.createElement("table");
+      table.className = "rel-table";
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      ["关系", "trust", "love", "familiarity", "tension", "互动", "边界"].forEach((label) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      order.forEach((sourceId) => {
+        order.forEach((targetId) => {
+          if (sourceId === targetId) return;
+          const rel = relationships[`${sourceId}->${targetId}`] || {};
+          const tr = document.createElement("tr");
+          const pairCell = document.createElement("td");
+          pairCell.className = "pair";
+          const source = document.createElement("strong");
+          source.textContent = sourceId;
+          const arrow = document.createElement("span");
+          arrow.className = "arrow";
+          arrow.textContent = " → ";
+          const target = document.createElement("strong");
+          target.textContent = targetId;
+          pairCell.append(source, arrow, target);
+          tr.appendChild(pairCell);
+
+          [["trust", 2], ["love", 2], ["familiarity", 2], ["tension", 2]].forEach(([field, digits]) => {
+            const td = document.createElement("td");
+            td.textContent = fmt(rel[field], digits);
+            if (field === "tension") {
+              td.className = `tension${Number(rel[field] || 0) >= 0.35 ? " hot" : ""}`;
+            }
+            tr.appendChild(td);
+          });
+
+          const interactions = document.createElement("td");
+          interactions.className = "interactions";
+          interactions.textContent = String(rel.interactions || 0);
+          tr.appendChild(interactions);
+
+          const boundary = document.createElement("td");
+          boundary.className = "boundary";
+          const boundaries = Array.isArray(rel.boundaries) ? rel.boundaries : [];
+          boundary.textContent = boundaries.length ? boundaries.join("、") : "—";
+          boundary.title = boundaries.join("、");
+          tr.appendChild(boundary);
+          tbody.appendChild(tr);
+        });
+      });
+      table.appendChild(tbody);
+      host.appendChild(table);
+    }
+
+    const edges = $("edges");
+    edges.textContent = "";
+    ((snapshot && snapshot.edges) || []).forEach((edge) => {
+      const chip = document.createElement("span");
+      chip.className = "chip bias";
+      chip.textContent = `${edge.source} → ${edge.target} · ${fmt(edge.strength, 3)}`;
+      edges.appendChild(chip);
+    });
+    if (!((snapshot && snapshot.edges) || []).length) {
+      const empty = document.createElement("span");
+      empty.className = "hint";
+      empty.textContent = "当前没有非零感染边。";
+      edges.appendChild(empty);
+    }
+  }
+
+  function renderSummary(snapshot) {
+    const state = snapshot || ui.state || {};
+    $("world-chip").textContent = state.world_id || "—";
+    $("turn-chip").textContent = String(state.turn || 0);
+    $("actor-chip").textContent = String((state.actor_order || []).length);
+    const chips = $("edge-chips");
+    chips.textContent = "";
+    const edges = state.edges || [];
+    if (!edges.length) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = "无感染边";
+      chips.appendChild(chip);
+    } else {
+      edges.forEach((edge) => {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${edge.source}→${edge.target} ${fmt(edge.strength, 3)}`;
+        chips.appendChild(chip);
+      });
+    }
+  }
+
+  function appendReplyList(host, entry, biases) {
+    const replies = document.createElement("div");
+    replies.className = "reply-list";
+    Object.entries(entry.utterances || {}).forEach(([actorId, utterance]) => {
+      const row = document.createElement("div");
+      row.className = "reply";
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = actorLabel(actorId);
+      const say = document.createElement("span");
+      say.className = "say";
+      say.textContent = utterance || "……";
+      row.append(who, say);
+      replies.appendChild(row);
+    });
+    host.appendChild(replies);
+
+    const biasLines = [];
+    Object.entries(biases || {}).forEach(([actorId, bias]) => {
+      const parts = Object.entries(bias)
+        .map(([dimension, value]) => `${dimension} ${Number(value) >= 0 ? "+" : ""}${fmt(value, 3)}`)
+        .join(" · ");
+      if (parts) biasLines.push(`${actorId} ← 感染：${parts}`);
+    });
+    if (biasLines.length) {
+      const line = document.createElement("div");
+      line.className = "appraisal-line";
+      line.textContent = biasLines.join("　");
+      host.appendChild(line);
+    }
+
+    const changes = entry.relationship_changes || {};
+    const changeText = Object.entries(changes).map(([listenerId, info]) => {
+      const delta = info.delta || {};
+      return `${listenerId} → ${entry.source}：trust ${delta.trust >= 0 ? "+" : ""}${fmt(delta.trust, 3)}，` +
+        `tension ${delta.tension >= 0 ? "+" : ""}${fmt(delta.tension, 3)}`;
+    });
+    if (changeText.length) {
+      const line = document.createElement("div");
+      line.className = "rel-change-line";
+      const strong = document.createElement("strong");
+      strong.textContent = "关系结算";
+      line.append(strong, document.createTextNode("　" + changeText.join("　")));
+      host.appendChild(line);
+    }
+  }
+
+  function renderChat(log) {
+    const host = $("chat");
+    host.textContent = "";
+    if (!(log || []).length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "发送第一句话，看看朋友们如何互相影响。";
+      host.appendChild(empty);
+      return;
+    }
+    log.forEach((entry) => {
+      const msg = document.createElement("div");
+      msg.className = `msg${entry.source === "user" ? " user" : ""}`;
+
+      const head = document.createElement("div");
+      head.className = "msg-head";
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = actorLabel(entry.source);
+      const turn = document.createElement("span");
+      turn.className = "turn";
+      turn.textContent = `#${entry.turn}`;
+      head.append(who, turn);
+
+      const text = document.createElement("div");
+      text.className = "msg-text";
+      text.textContent = entry.text || "";
+
+      msg.append(head, text);
+      if (entry.appraisal) {
+        const appraisal = document.createElement("div");
+        appraisal.className = "appraisal-line";
+        appraisal.textContent =
+          `goal_relevance ${fmt(entry.appraisal.goal_relevance, 2)} · ` +
+          `goal_conduciveness ${fmt(entry.appraisal.goal_conduciveness, 2)} · ` +
+          `social_evaluation ${fmt(entry.appraisal.social_evaluation, 2)}`;
+        msg.appendChild(appraisal);
+      }
+      appendReplyList(msg, entry, entry.biases || {});
+      host.appendChild(msg);
+    });
+    host.scrollTop = host.scrollHeight;
+  }
+
+  function renderScene(payload, options) {
+    const opts = options || {};
+    const snapshot = payload.scene || payload;
+    ui.state = Object.assign({}, payload, snapshot);
+    if (payload.config) fillConfigIfIdle(payload.config);
+    renderSpeakerSelect();
+    const log = payload.turn_log || (opts.appendLog ? null : null);
+    const latest = latestUtterancesFromLog(log);
+    ui.latest = latest;
+    const actors = opts.actors || snapshot.actors || payload.actors || {};
+    renderActorCards(actors, latest);
+    renderSummary(snapshot);
+    renderRelationships(snapshot);
+    renderProactive(snapshot.proactive);
+    if (!opts.keepChat) renderChat(log);
+  }
+
+  function fillConfigIfIdle(config) {
+    if (!ui.dirty) fillConfig(config);
+  }
+
+  function initialRender(payload) {
+    ui.state = Object.assign({}, payload, payload.scene || {});
+    fillConfig(payload.config || (payload.scene && payload.scene.config));
+    renderSpeakerSelect();
+    const latest = latestUtterancesFromLog(payload.turn_log || []);
+    ui.latest = latest;
+    renderActorCards((payload.actors) || (payload.scene && payload.scene.actors) || {}, latest);
+    renderSummary(payload.scene || payload);
+    renderRelationships(payload.scene || payload);
+    renderProactive(payload.scene && payload.scene.proactive);
+    renderChat(payload.turn_log || []);
+    setClean();
+  }
+
+  async function loadCharacters() {
+    const data = await api("/api/characters");
+    ui.characters = data.characters || [];
+  }
+
+  async function refreshState() {
+    if (ui.busy) return;
+    ui.busy = true;
+    setStatus("正在刷新…", "busy");
+    try {
+      const payload = await api("/api/scene/state");
+      initialRender(payload);
+      setStatus("已刷新", "ok");
+    } catch (error) {
+      setStatus(`刷新失败：${error.message}`, "error");
+    } finally {
+      ui.busy = false;
+    }
+  }
+
+  async function applyConfig() {
+    if (ui.busy) return;
+    let config;
+    try {
+      config = readConfig();
+    } catch (error) {
+      setStatus(error.message, "error");
+      return;
+    }
+    ui.busy = true;
+    setStatus("正在重建场景…", "busy");
+    try {
+      const payload = await api("/api/scene/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          config,
+          reset_relationships: $("reset-relationships").checked,
+        }),
+      });
+      $("reset-relationships").checked = false;
+      initialRender(payload);
+      setStatus("场景已重建", "ok");
+    } catch (error) {
+      setStatus(`重建失败：${error.message}`, "error");
+    } finally {
+      ui.busy = false;
+    }
+  }
+
+  function applyTurnPayload(payload, proactiveOverride) {
+    // 服务端响应含本回合台词，但不含完整 turn_log；本地补一条后再渲染。
+    const entry = {
+      turn: payload.turn,
+      source: payload.source,
+      text: payload.text,
+      appraisal: payload.appraisal,
+      biases: payload.biases,
+      utterances: Object.fromEntries(
+        Object.entries(payload.actors || {}).map(([actorId, actor]) => [actorId, actor.utterance || ""])
+      ),
+      relationship_changes: payload.relationship_changes,
+    };
+    const existing = (ui.state && ui.state.turn_log) || [];
+    const log = existing.concat([entry]).slice(-40);
+    ui.latest = latestUtterancesFromLog(log);
+    const proactive = proactiveOverride || payload.scene.proactive;
+    const merged = Object.assign({}, ui.state, {
+      turn: payload.turn,
+      world_id: payload.scene.world_id,
+      actor_order: payload.scene.actor_order,
+      actors: payload.scene.actors,
+      relationships: payload.scene.relationships,
+      edges: payload.scene.edges,
+      proactive,
+      turn_log: log,
+    });
+    ui.state = merged;
+    renderSpeakerSelect();
+    renderActorCards(payload.actors || {}, ui.latest);
+    renderSummary(payload.scene);
+    renderRelationships(payload.scene);
+    const chosen = payload.proactive_send ? payload.proactive_send.candidate : null;
+    renderProactive(proactive, chosen);
+    renderChat(log);
+  }
+
+  async function sendTurn() {
+    if (ui.busy) return;
+    if (ui.dirty) {
+      setStatus("配置尚未应用，请先点“应用并重建”", "error");
+      return;
+    }
+    const text = $("text").value.trim();
+    if (!text) {
+      setStatus("先输入一句话", "error");
+      return;
+    }
+    const speakerId = $("speaker").value || "user";
+    ui.busy = true;
+    $("send").disabled = true;
+    setStatus("朋友们正在反应…", "busy");
+    try {
+      const payload = await api("/api/scene/turn", {
+        method: "POST",
+        body: JSON.stringify({ speaker_id: speakerId, text }),
+      });
+      applyTurnPayload(payload);
+      $("text").value = "";
+      updateCount();
+      setStatus(`第 ${payload.turn} 回合完成`, "ok");
+    } catch (error) {
+      setStatus(`发送失败：${error.message}`, "error");
+    } finally {
+      ui.busy = false;
+      $("send").disabled = false;
+    }
+  }
+
+  async function proactiveAction(send) {
+    if (ui.busy) return;
+    if (ui.dirty) {
+      setStatus("配置尚未应用，请先点“应用并重建”", "error");
+      return;
+    }
+    const body = { action: send ? "send" : "check" };
+    const actorId = $("proactive-actor").value;
+    if (actorId) body.actor_id = actorId;
+    ui.busy = true;
+    $("proactive-check").disabled = true;
+    $("proactive-send").disabled = true;
+    setStatus(send ? "正在生成主动消息…" : "正在检查主动联系意愿…", "busy");
+    try {
+      const payload = await api("/api/scene/proactive", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      if (send && payload.sent) {
+        const info = payload.proactive_send || {};
+        applyTurnPayload(payload, info.snapshot);
+        setStatus(`${info.name || info.actor_id} 主动发了一句 · 第 ${payload.turn} 回合`, "ok");
+      } else if (send && payload.sent === false) {
+        renderProactive(payload.proactive, null);
+        setStatus("当前没有可主动联系的角色", "error");
+      } else {
+        renderProactive(payload.proactive, payload.chosen);
+        setStatus("已检查主动联系意愿", "ok");
+      }
+    } catch (error) {
+      setStatus(`主动联系失败：${error.message}`, "error");
+    } finally {
+      ui.busy = false;
+      $("proactive-check").disabled = false;
+      $("proactive-send").disabled = false;
+    }
+  }
+
+  function updateCount() {
+    $("text-count").textContent = `${$("text").value.length} / 2000`;
+  }
+
+  function bindConfigInputs() {
+    [
+      "world-id", "gain", "cap", "hop-decay", "max-hops",
+      "proactive-threshold", "proactive-min-silence", "proactive-window",
+      "proactive-cooldown", "proactive-daily", "proactive-unanswered",
+      "proactive-quiet-start", "proactive-quiet-end",
+    ].forEach((id) => {
+      $(id).addEventListener("input", markDirty);
+      $(id).addEventListener("change", markDirty);
+    });
+  }
+
+  async function boot() {
+    bindConfigInputs();
+    $("add-actor").addEventListener("click", () => {
+      if (currentActorRows().length >= ACTOR_LIMIT) return;
+      addActorRow(null);
+      markDirty();
+    });
+    $("apply").addEventListener("click", applyConfig);
+    $("refresh").addEventListener("click", refreshState);
+    $("send").addEventListener("click", sendTurn);
+    $("proactive-check").addEventListener("click", () => proactiveAction(false));
+    $("proactive-send").addEventListener("click", () => proactiveAction(true));
+    $("text").addEventListener("input", updateCount);
+    $("text").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        sendTurn();
+      }
+    });
+    try {
+      await loadCharacters();
+      const payload = await api("/api/scene/state");
+      initialRender(payload);
+      setStatus("已连接", "ok");
+    } catch (error) {
+      setStatus(`连接失败：${error.message}`, "error");
+    }
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

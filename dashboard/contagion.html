@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多角色情绪感染 · Emotion Engine L7</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --line: #2d3748;
+    --text: #d7e0ea;
+    --muted: #8796a8;
+    --accent: #63b3ed;
+    --accent-2: #b794f4;
+    --good: #68d391;
+    --bad: #f6ad55;
+    --danger: #fc8181;
+    --joy: #f0b95e;
+    --sadness: #6b8dd6;
+    --anger: #d96a6a;
+    --fear: #9b7bd6;
+    --surprise: #63c7c7;
+    --longing: #d48bb8;
+    --guilt: #b58a6a;
+    --neutral: #3a4a63;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(circle at 20% 0%, #172033 0, var(--bg) 38%);
+    color: var(--text);
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+  button, select, input { font: inherit; }
+  button {
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 11px;
+    transition: .15s border-color, .15s background, .15s transform;
+  }
+  button:hover { border-color: var(--accent); background: #223049; }
+  button:active { transform: translateY(1px); }
+  button.primary {
+    background: linear-gradient(135deg, #2b6cb0, #6b46c1);
+    border-color: #4c51bf;
+    color: #fff;
+    font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.15); }
+  button.ghost { background: transparent; }
+  button.danger:hover { border-color: var(--danger); color: var(--danger); }
+  select, input[type="number"], input[type="text"] {
+    background: #0f1621;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 6px 8px;
+    outline: none;
+    min-width: 0;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: rgba(13, 17, 23, .88);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .3px; }
+  .badge {
+    font-size: 11px;
+    color: #9ae6b4;
+    background: rgba(72, 187, 120, .11);
+    border: 1px solid rgba(72, 187, 120, .35);
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  header .spacer { flex: 1; }
+  #status { color: var(--muted); font-size: 12px; max-width: 36vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.error { color: var(--danger); }
+  #status.ok { color: var(--good); }
+
+  main {
+    display: grid;
+    grid-template-columns: 380px minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px 20px 40px;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .panel, .card {
+    background: linear-gradient(180deg, rgba(28, 35, 48, .92), rgba(22, 27, 34, .92));
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  }
+  .panel { padding: 12px; }
+  .card { padding: 12px; }
+  .panel > .card + .card { margin-top: 12px; }
+  .card h2, .panel h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row > label { color: var(--muted); white-space: nowrap; }
+  .row > select, .row > input { flex: 1; }
+  .stack > * + * { margin-top: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .muted { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  .preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .preset-row button { padding: 5px 8px; font-size: 12px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .actions button { flex: 1; min-width: 100px; }
+
+  .node-card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px;
+    background: rgba(15, 22, 33, .72);
+  }
+  .node-card + .node-card { margin-top: 10px; }
+  .node-head { display: flex; align-items: center; gap: 8px; }
+  .node-badge {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #2b6cb0, #6b46c1);
+    color: #fff;
+    font-weight: 800;
+    font-size: 15px;
+  }
+  .node-head select { flex: 1; }
+  .node-name { color: var(--muted); font-size: 11px; min-width: 44px; text-align: right; }
+  .node-head .remove { padding: 4px 7px; color: var(--muted); }
+  .rel-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 9px; }
+  .rel-grid label, .appraisal-row label { display: block; color: var(--muted); font-size: 11px; }
+  .rel-grid input { width: 100%; margin-top: 2px; }
+  .boundary-row { margin-top: 6px; }
+  .boundary-row input { width: 100%; }
+  .appraisal-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .appraisal-row {
+    display: grid;
+    grid-template-columns: 74px 1fr 36px;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .appraisal-row output { color: var(--accent); font-variant-numeric: tabular-nums; text-align: right; font-size: 11px; }
+  .text-parse { display: flex; gap: 6px; margin-top: 8px; }
+  .text-parse input { flex: 1; }
+  .text-parse button { white-space: nowrap; padding: 6px 8px; }
+  .parse-hint { min-height: 14px; margin-top: 3px; color: var(--muted); font-size: 10px; }
+
+  .edge-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 70px 30px;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+  }
+  .edge-row .arrow { text-align: center; color: var(--muted); }
+  .edge-row .remove { padding: 3px 6px; color: var(--muted); }
+  #add-edge { margin-top: 8px; width: 100%; }
+
+  body:not(.pair-mode) .pair-only { display: none; }
+  #pair-options { display: none; }
+  body.pair-mode #pair-options { display: block; }
+  #edges-card { display: none; }
+  body:not(.pair-mode) #edges-card { display: block; }
+  #strength-row { display: none; }
+  body.explicit-strength.pair-mode #strength-row { display: flex; }
+
+  .output { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .summary-card { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .summary-card h2 { margin: 0; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, .025);
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip strong { color: var(--text); font-weight: 600; }
+  .chip.bias { border-color: rgba(99, 179, 237, .35); color: #90cdf4; }
+  .chip.warn { border-color: rgba(246, 173, 85, .45); color: var(--bad); }
+
+  .graph-card { padding: 8px 12px 4px; overflow: hidden; }
+  #graph { width: 100%; height: clamp(260px, 34vw, 400px); display: block; }
+  .graph-legend { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 4px 8px; color: var(--muted); font-size: 10px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 3px; }
+
+  #node-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .result-card { position: relative; overflow: hidden; }
+  .result-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 3px;
+    height: 100%;
+    background: var(--neutral);
+  }
+  .result-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .result-head .id { font-size: 18px; font-weight: 800; }
+  .result-head .name { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dominant {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .06);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .bias-list { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  .bias-chip {
+    font-size: 10px;
+    padding: 3px 6px;
+    border-radius: 6px;
+    background: rgba(99, 179, 237, .08);
+    border: 1px solid rgba(99, 179, 237, .22);
+    color: #bee3f8;
+    font-variant-numeric: tabular-nums;
+  }
+  .bias-empty { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+  .channel-row {
+    display: grid;
+    grid-template-columns: 58px 1fr 58px;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 11px;
+  }
+  .channel-row .label { color: var(--muted); }
+  .bar-track { height: 6px; background: #0b111a; border-radius: 999px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #2b6cb0, #63b3ed); }
+  .channel-row .value { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  .channel-row .delta { color: var(--muted); font-size: 9px; margin-left: 3px; }
+
+  .log-card { min-height: 90px; }
+  .log-line {
+    display: grid;
+    grid-template-columns: 44px 30px 1fr;
+    gap: 6px;
+    padding: 4px 0;
+    border-bottom: 1px dashed rgba(45, 55, 72, .7);
+    font-size: 11px;
+  }
+  .log-line:last-child { border-bottom: 0; }
+  .log-line .turn { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .log-line .id { color: var(--accent); font-weight: 700; }
+  .log-line .detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); padding: 10px 0; text-align: center; }
+
+  @media (max-width: 560px) {
+    header { padding: 10px 12px; }
+    header h1 { font-size: 14px; }
+    main { padding: 12px; }
+    .grid-3 { grid-template-columns: 1fr 1fr; }
+    .edge-row { grid-template-columns: 1fr 1fr 60px 28px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🕸️ 多角色情绪感染</h1>
+  <span class="badge">L7.3 网络 · L7.4 方向关系</span>
+  <div class="spacer"></div>
+  <span id="status">准备中…</span>
+  <a href="/">← 单角色仪表盘</a>
+</header>
+
+<main>
+  <aside class="panel">
+    <section class="card">
+      <h2>实验预设</h2>
+      <div class="preset-row">
+        <button data-preset="chain">群体链 A→B→C</button>
+        <button data-preset="mutual">双向 A↔B</button>
+        <button data-preset="directional">方向关系</button>
+        <button data-preset="neutral">全部中性</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label for="mode">模式</label>
+        <select id="mode">
+          <option value="network">群体网络 network</option>
+          <option value="pair">双人 pair</option>
+        </select>
+      </div>
+      <div id="pair-options" class="stack" style="margin-top:8px">
+        <div class="grid-2">
+          <label class="hint">源 source
+            <select id="pair-source" style="width:100%;margin-top:2px"></select>
+          </label>
+          <label class="hint">目标 target
+            <select id="pair-target" style="width:100%;margin-top:2px"></select>
+          </label>
+        </div>
+        <div class="grid-2">
+          <label class="hint">方向
+            <select id="pair-direction" style="width:100%;margin-top:2px">
+              <option value="one-way">单向 A→B</option>
+              <option value="bidirectional">双向 A↔B</option>
+            </select>
+          </label>
+          <label class="hint">强度来源
+            <select id="strength-mode" style="width:100%;margin-top:2px">
+              <option value="explicit">显式 strength</option>
+              <option value="auto">自动 trust/love</option>
+              <option value="directional">方向关系</option>
+            </select>
+          </label>
+        </div>
+        <div class="row" id="strength-row">
+          <label for="strength">strength</label>
+          <input id="strength" type="number" min="0" max="1" step="0.05" value="0.8">
+        </div>
+        <div class="hint">自动模式读取节点 trust / love；方向模式还会读取 familiarity 与 boundaries。</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>节点 <span class="muted" id="node-count"></span></h2>
+      <div id="nodes"></div>
+      <button id="add-node" class="ghost" style="width:100%;margin-top:8px">+ 添加节点（最多 6 个）</button>
+    </section>
+
+    <section class="card" id="edges-card">
+      <h2>有向边</h2>
+      <div class="hint">第一跳使用边权；多跳再乘 hop_decay。所有偏置在 tick 前算完。</div>
+      <div id="edges"></div>
+      <button id="add-edge" class="ghost">+ 添加边</button>
+    </section>
+
+    <section class="card">
+      <h2>全局参数</h2>
+      <div class="grid-3">
+        <label class="hint">gain
+          <input id="gain" type="number" min="0" max="1" step="0.01" value="0.2" style="width:100%">
+        </label>
+        <label class="hint">cap
+          <input id="cap" type="number" min="0" max="0.2" step="0.01" value="0.08" style="width:100%">
+        </label>
+        <label class="hint">hop_decay
+          <input id="hop-decay" type="number" min="0" max="1" step="0.05" value="0.5" style="width:100%">
+        </label>
+        <label class="hint">max_hops
+          <input id="max-hops" type="number" min="1" max="8" step="1" value="3" style="width:100%">
+        </label>
+        <label class="hint">每步分钟
+          <input id="minutes" type="number" min="1" max="120" step="1" value="10" style="width:100%">
+        </label>
+      </div>
+      <div class="actions">
+        <button id="run-one" class="primary">执行 1 tick</button>
+        <button id="run-five">连续 5 tick</button>
+        <button id="reset">重置引擎</button>
+      </div>
+      <div class="hint" style="margin-top:8px">修改节点 / 边 / 参数后，下一次 tick 会自动重建引擎。</div>
+    </section>
+  </aside>
+
+  <section class="output">
+    <div class="card summary-card">
+      <h2>网络概览</h2>
+      <span class="chip" id="mode-chip">mode <strong>—</strong></span>
+      <span class="chip" id="turn-chip">turn <strong>0</strong></span>
+      <span class="chip" id="node-chip">nodes <strong>—</strong></span>
+      <span id="strength-chips" style="display:flex;flex-wrap:wrap;gap:6px"></span>
+    </div>
+
+    <div class="card graph-card">
+      <svg id="graph" viewBox="0 0 760 360" role="img" aria-label="感染网络图"></svg>
+      <div class="graph-legend">
+        <span><i class="legend-dot" style="background:var(--joy)"></i>joy</span>
+        <span><i class="legend-dot" style="background:var(--sadness)"></i>sadness</span>
+        <span><i class="legend-dot" style="background:var(--anger)"></i>anger</span>
+        <span><i class="legend-dot" style="background:var(--fear)"></i>fear</span>
+        <span><i class="legend-dot" style="background:var(--surprise)"></i>surprise</span>
+        <span><i class="legend-dot" style="background:var(--longing)"></i>longing</span>
+        <span><i class="legend-dot" style="background:var(--guilt)"></i>guilt</span>
+        <span><i class="legend-dot" style="background:var(--neutral)"></i>neutral</span>
+      </div>
+    </div>
+
+    <div id="node-results"></div>
+
+    <div class="card log-card">
+      <h2>感染记录</h2>
+      <div id="log"><div class="empty">执行 tick 后显示每轮节点状态与感染偏置。</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   状态
+   ═══════════════════════════════════════════════════════════ */
+const CHANNELS = ["joy", "sadness", "anger", "fear", "love", "trust"];
+const CHANNEL_LABELS = {
+  joy: "joy", sadness: "sadness", anger: "anger",
+  fear: "fear", love: "love", trust: "trust",
+};
+const DOMINANT_LABELS = {
+  joy_dominant: "joy", sadness_dominant: "sadness",
+  anger_dominant: "anger", fear_dominant: "fear",
+  surprise_dominant: "surprise", longing_dominant: "longing",
+  guilt_dominant: "guilt", neutral: "neutral",
+};
+const DOMINANT_COLORS = {
+  joy: "#f0b95e", sadness: "#6b8dd6", anger: "#d96a6a",
+  fear: "#9b7bd6", surprise: "#63c7c7", longing: "#d48bb8",
+  guilt: "#b58a6a", neutral: "#3a4a63",
+};
+const APPRAISAL_META = [
+  { key: "goal_relevance", label: "目标相关", min: 0, max: 1, step: 0.05 },
+  { key: "goal_conduciveness", label: "目标助力", min: -1, max: 1, step: 0.05 },
+  { key: "expectedness", label: "预期度", min: 0, max: 1, step: 0.05 },
+  { key: "coping_potential", label: "应对力", min: 0, max: 1, step: 0.05 },
+  { key: "other_agency", label: "他人归因", min: 0, max: 1, step: 0.05 },
+  { key: "social_evaluation", label: "社会评价", min: -1, max: 1, step: 0.05 },
+];
+const BIAS_META = [
+  { key: "goal_conduciveness", label: "助力" },
+  { key: "expectedness", label: "预期" },
+  { key: "coping_potential", label: "应对" },
+  { key: "social_evaluation", label: "评价" },
+];
+const NEGATIVE_APPRAISAL = {
+  goal_relevance: 0.8, goal_conduciveness: -0.6, expectedness: 0.2,
+  coping_potential: 0.2, other_agency: 0.6, social_evaluation: -0.4,
+};
+const POSITIVE_APPRAISAL = {
+  goal_relevance: 0.8, goal_conduciveness: 0.6, expectedness: 0.3,
+  coping_potential: 0.6, other_agency: 0.4, social_evaluation: 0.7,
+};
+const NEUTRAL_APPRAISAL = {
+  goal_relevance: 0.4, goal_conduciveness: 0.0, expectedness: 0.5,
+  coping_potential: 0.5, other_agency: 0.2, social_evaluation: 0.0,
+};
+
+let charList = [
+  { id: "default", name: "Default", builtin: true },
+  { id: "furina", name: "芙宁娜", builtin: true },
+  { id: "kokomi", name: "心海", builtin: true },
+  { id: "columbina", name: "哥伦比娅", builtin: true },
+];
+let nodes = [];
+let edges = [];
+let lastData = null;
+let busy = false;
+
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
+function setStatus(text, kind = "") {
+  const el = $("#status");
+  el.textContent = text;
+  el.className = kind;
+}
+function charName(id) {
+  const found = charList.find((c) => c.id === id);
+  return found ? found.name : id;
+}
+function nextNodeId() {
+  const used = new Set(nodes.map((n) => n.id));
+  for (let i = 0; i < 26; i++) {
+    const id = String.fromCharCode(65 + i);
+    if (!used.has(id)) return id;
+  }
+  return "N" + (nodes.length + 1);
+}
+function defaultNode(id, character = "default") {
+  return {
+    id,
+    character,
+    trust: 0.5,
+    love: 0.5,
+    familiarity: 0.5,
+    boundaries: "",
+    appraisal: clone(NEUTRAL_APPRAISAL),
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   预设
+   ═══════════════════════════════════════════════════════════ */
+const PRESETS = {
+  chain: () => ({
+    mode: "network",
+    nodes: [
+      { ...defaultNode("A", "furina"), trust: 0.8, love: 1.2, familiarity: 0.8,
+        boundaries: "不深夜打扰", appraisal: clone(NEGATIVE_APPRAISAL) },
+      { ...defaultNode("B", "kokomi"), trust: 0.6, love: 0.6, familiarity: 0.5 },
+      { ...defaultNode("C", "columbina"), trust: 0.3, love: 0.3, familiarity: 0.2 },
+    ],
+    edges: [
+      { source: "A", target: "B", strength: 0.8 },
+      { source: "B", target: "C", strength: 0.6 },
+    ],
+    pair: { source: "A", target: "B", direction: "one-way", strengthMode: "explicit", strength: 0.8 },
+  }),
+  mutual: () => ({
+    mode: "pair",
+    nodes: [
+      { ...defaultNode("A", "furina"), trust: 0.9, love: 1.2, familiarity: 0.9,
+        appraisal: clone(NEGATIVE_APPRAISAL) },
+      { ...defaultNode("B", "kokomi"), trust: 0.7, love: 0.8, familiarity: 0.6,
+        appraisal: clone(POSITIVE_APPRAISAL) },
+    ],
+    edges: [],
+    pair: { source: "A", target: "B", direction: "bidirectional", strengthMode: "auto", strength: 0.8 },
+  }),
+  directional: () => ({
+    mode: "pair",
+    nodes: [
+      { ...defaultNode("A", "furina"), trust: 0.9, love: 2.0, familiarity: 1.0,
+        appraisal: clone(NEGATIVE_APPRAISAL) },
+      { ...defaultNode("B", "columbina"), trust: 0.2, love: 0.1, familiarity: 0.1,
+        boundaries: "保持距离, 不触碰", appraisal: clone(NEUTRAL_APPRAISAL) },
+    ],
+    edges: [],
+    pair: { source: "A", target: "B", direction: "bidirectional", strengthMode: "directional", strength: 0.8 },
+  }),
+  neutral: () => ({
+    mode: "network",
+    nodes: [
+      { ...defaultNode("A", "furina") },
+      { ...defaultNode("B", "kokomi") },
+      { ...defaultNode("C", "columbina") },
+    ],
+    edges: [
+      { source: "A", target: "B", strength: 0.6 },
+      { source: "B", target: "C", strength: 0.4 },
+    ],
+    pair: { source: "A", target: "B", direction: "bidirectional", strengthMode: "auto", strength: 0.8 },
+  }),
+};
+
+function applyPreset(name) {
+  const preset = PRESETS[name]();
+  nodes = clone(preset.nodes);
+  edges = clone(preset.edges);
+  $("#mode").value = preset.mode;
+  $("#strength-mode").value = preset.pair.strengthMode;
+  $("#pair-direction").value = preset.pair.direction;
+  $("#strength").value = preset.pair.strength;
+  renderNodes();
+  $("#pair-source").value = preset.pair.source;
+  $("#pair-target").value = preset.pair.target;
+  syncModeUi();
+  renderEdges();
+  resetSimulation();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   节点编辑器
+   ═══════════════════════════════════════════════════════════ */
+function characterOptions(selected) {
+  const options = charList.map((c) =>
+    `<option value="${esc(c.id)}" ${c.id === selected ? "selected" : ""}>${esc(c.name)} (${esc(c.id)})</option>`
+  );
+  if (selected && !charList.some((c) => c.id === selected)) {
+    options.push(`<option value="${esc(selected)}" selected>${esc(selected)}</option>`);
+  }
+  return options.join("");
+}
+
+function renderNodes() {
+  const container = $("#nodes");
+  container.innerHTML = "";
+  nodes.forEach((node, index) => {
+    const card = document.createElement("div");
+    card.className = "node-card";
+    card.dataset.id = node.id;
+    card.innerHTML = `
+      <div class="node-head">
+        <div class="node-badge">${esc(node.id)}</div>
+        <select class="node-char" aria-label="角色">${characterOptions(node.character)}</select>
+        <div class="node-name">${esc(charName(node.character))}</div>
+        <button class="remove ghost" title="删除节点" ${nodes.length <= 2 ? "disabled" : ""}>×</button>
+      </div>
+      <div class="rel-grid pair-only">
+        <label>trust<input class="rel-input" data-key="trust" type="number" min="0" max="1" step="0.05" value="${esc(node.trust)}"></label>
+        <label>love<input class="rel-input" data-key="love" type="number" min="0" max="2" step="0.05" value="${esc(node.love)}"></label>
+        <label>familiarity<input class="rel-input" data-key="familiarity" type="number" min="0" max="1" step="0.05" value="${esc(node.familiarity)}"></label>
+      </div>
+      <div class="boundary-row pair-only">
+        <label class="hint">boundaries（逗号分隔）
+          <input class="rel-input" data-key="boundaries" type="text" value="${esc(node.boundaries)}" placeholder="不深夜打扰, 保持距离">
+        </label>
+      </div>
+      <div class="appraisal-title"><span>输入 Appraisal</span><span class="hint">仅本轮输入</span></div>
+      <div class="appraisal-rows"></div>
+      <div class="text-parse">
+        <input class="parse-text" type="text" placeholder="输入事件文本，用 JEV 解析…">
+        <button class="parse-btn ghost">解析文本</button>
+      </div>
+      <div class="parse-hint"></div>
+    `;
+    const rows = card.querySelector(".appraisal-rows");
+    APPRAISAL_META.forEach((meta) => {
+      const row = document.createElement("div");
+      row.className = "appraisal-row";
+      row.innerHTML = `
+        <label>${meta.label}</label>
+        <input class="appraisal-input" data-key="${meta.key}" type="range"
+               min="${meta.min}" max="${meta.max}" step="${meta.step}"
+               value="${esc(node.appraisal[meta.key])}">
+        <output data-key="${meta.key}">${Number(node.appraisal[meta.key]).toFixed(2)}</output>
+      `;
+      rows.appendChild(row);
+    });
+
+    card.querySelector(".remove").addEventListener("click", () => {
+      if (nodes.length <= 2) return;
+      nodes = nodes.filter((n) => n.id !== node.id);
+      edges = edges.filter((e) => e.source !== node.id && e.target !== node.id);
+      renderNodes();
+      renderEdges();
+      syncPairSelects();
+      updateNodeCount();
+    });
+    card.querySelector(".node-char").addEventListener("change", (event) => {
+      node.character = event.target.value;
+      card.querySelector(".node-name").textContent = charName(node.character);
+    });
+    card.querySelectorAll(".rel-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const key = input.dataset.key;
+        node[key] = key === "boundaries" ? input.value : Number(input.value);
+      });
+    });
+    card.querySelectorAll(".appraisal-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const key = input.dataset.key;
+        node.appraisal[key] = Number(input.value);
+        card.querySelector(`output[data-key="${key}"]`).textContent =
+          Number(input.value).toFixed(2);
+      });
+    });
+    card.querySelector(".parse-btn").addEventListener("click", () => parseTextForNode(node, card));
+    card.querySelector(".parse-text").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") parseTextForNode(node, card);
+    });
+    container.appendChild(card);
+  });
+  updateNodeCount();
+  syncPairSelects();
+}
+
+function updateNodeCount() {
+  $("#node-count").textContent = `(${nodes.length}/6)`;
+  $("#add-node").disabled = nodes.length >= 6;
+}
+
+async function parseTextForNode(node, card) {
+  const input = card.querySelector(".parse-text");
+  const hint = card.querySelector(".parse-hint");
+  const text = input.value.trim();
+  if (!text) { hint.textContent = "请先输入文本。"; return; }
+  hint.textContent = "解析中…";
+  try {
+    const data = await postJSON("/api/contagion/appraise", { text });
+    node.appraisal = { ...node.appraisal, ...data.appraisal };
+    APPRAISAL_META.forEach((meta) => {
+      const slider = card.querySelector(`.appraisal-input[data-key="${meta.key}"]`);
+      slider.value = node.appraisal[meta.key];
+      card.querySelector(`output[data-key="${meta.key}"]`).textContent =
+        Number(node.appraisal[meta.key]).toFixed(2);
+    });
+    hint.textContent = `JEV ${data.source} · 置信度 ${Number(data.confidence).toFixed(2)}`;
+  } catch (error) {
+    hint.textContent = error.message;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   边编辑器
+   ═══════════════════════════════════════════════════════════ */
+function nodeOptions(selected) {
+  return nodes.map((node) =>
+    `<option value="${esc(node.id)}" ${node.id === selected ? "selected" : ""}>${esc(node.id)} · ${esc(charName(node.character))}</option>`
+  ).join("");
+}
+
+function renderEdges() {
+  const container = $("#edges");
+  container.innerHTML = "";
+  if (!edges.length) {
+    container.innerHTML = '<div class="empty" style="padding:6px 0">没有边，节点不会互相感染。</div>';
+    return;
+  }
+  edges.forEach((edge, index) => {
+    const row = document.createElement("div");
+    row.className = "edge-row";
+    row.innerHTML = `
+      <select class="edge-source">${nodeOptions(edge.source)}</select>
+      <select class="edge-target">${nodeOptions(edge.target)}</select>
+      <input class="edge-strength" type="number" min="0" max="1" step="0.05" value="${esc(edge.strength)}" title="strength">
+      <button class="remove ghost" title="删除边">×</button>
+    `;
+    row.querySelector(".edge-source").addEventListener("change", (event) => {
+      edge.source = event.target.value;
+    });
+    row.querySelector(".edge-target").addEventListener("change", (event) => {
+      edge.target = event.target.value;
+    });
+    row.querySelector(".edge-strength").addEventListener("input", (event) => {
+      edge.strength = Number(event.target.value);
+    });
+    row.querySelector(".remove").addEventListener("click", () => {
+      edges.splice(index, 1);
+      renderEdges();
+    });
+    container.appendChild(row);
+  });
+}
+
+function addEdge() {
+  if (nodes.length < 2) return;
+  const existing = new Set(edges.map((e) => `${e.source}->${e.target}`));
+  for (const source of nodes) {
+    for (const target of nodes) {
+      if (source.id === target.id) continue;
+      if (!existing.has(`${source.id}->${target.id}`)) {
+        edges.push({ source: source.id, target: target.id, strength: 0.5 });
+        renderEdges();
+        return;
+      }
+    }
+  }
+  setStatus("所有有向边都已被占用", "error");
+}
+
+/* ═══════════════════════════════════════════════════════════
+   模式与配置
+   ═══════════════════════════════════════════════════════════ */
+function syncModeUi() {
+  const pairMode = $("#mode").value === "pair";
+  document.body.classList.toggle("pair-mode", pairMode);
+  document.body.classList.toggle("explicit-strength",
+    $("#strength-mode").value === "explicit");
+  syncPairSelects();
+  if (pairMode && nodes.length !== 2) {
+    setStatus("pair 模式需要恰好 2 个节点：请使用「双向 / 方向关系」预设或删除多余节点", "error");
+  }
+}
+
+function syncPairSelects() {
+  const ids = nodes.map((n) => n.id);
+  const source = $("#pair-source");
+  const target = $("#pair-target");
+  const oldSource = source.value;
+  const oldTarget = target.value;
+  source.innerHTML = nodeOptions(ids.includes(oldSource) ? oldSource : ids[0]);
+  target.innerHTML = nodeOptions(ids.includes(oldTarget) ? oldTarget : ids[1]);
+  if (source.value === target.value) {
+    target.value = ids.find((id) => id !== source.value) || ids[0];
+  }
+}
+
+function buildConfig() {
+  return {
+    mode: $("#mode").value,
+    nodes: nodes.map((n) => ({
+      id: n.id,
+      character: n.character,
+      trust: Number(n.trust),
+      love: Number(n.love),
+      familiarity: Number(n.familiarity),
+      boundaries: n.boundaries,
+    })),
+    edges: edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      strength: Number(e.strength),
+    })),
+    source: $("#pair-source").value,
+    target: $("#pair-target").value,
+    pair_direction: $("#pair-direction").value,
+    strength_mode: $("#strength-mode").value,
+    strength: Number($("#strength").value),
+    gain: Number($("#gain").value),
+    cap: Number($("#cap").value),
+    hop_decay: Number($("#hop-decay").value),
+    max_hops: Number($("#max-hops").value),
+    minutes_per_step: Number($("#minutes").value),
+  };
+}
+
+function buildAppraisals() {
+  const result = {};
+  nodes.forEach((node) => { result[node.id] = node.appraisal; });
+  return result;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   服务器调用
+   ═══════════════════════════════════════════════════════════ */
+async function fetchJSON(url, options = {}) {
+  const response = await fetch(url, options);
+  let data = null;
+  try { data = await response.json(); } catch (_) { /* ignore */ }
+  if (!response.ok) {
+    throw new Error((data && data.error) || `HTTP ${response.status}`);
+  }
+  return data || {};
+}
+async function postJSON(path, payload) {
+  return fetchJSON(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function resetSimulation() {
+  if (busy) return;
+  busy = true;
+  setStatus("正在重置引擎…");
+  try {
+    const data = await postJSON("/api/contagion/reset", { config: buildConfig() });
+    lastData = data;
+    renderAll(data);
+    setStatus(`已重建 ${data.node_order.length} 个隔离引擎`, "ok");
+  } catch (error) {
+    setStatus(`重置失败：${error.message}`, "error");
+  } finally {
+    busy = false;
+  }
+}
+
+async function runTicks(steps) {
+  if (busy) return;
+  busy = true;
+  setStatus(`执行 ${steps} tick…`);
+  try {
+    const data = await postJSON("/api/contagion/tick", {
+      config: buildConfig(),
+      appraisals: buildAppraisals(),
+      steps,
+    });
+    lastData = data;
+    renderAll(data);
+    setStatus(
+      data.rebuilt
+        ? `配置已变化，重建引擎后执行 ${steps} tick`
+        : `完成 ${steps} tick · 当前第 ${data.turn} 轮`,
+      "ok",
+    );
+  } catch (error) {
+    setStatus(`执行失败：${error.message}`, "error");
+  } finally {
+    busy = false;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   渲染
+   ═══════════════════════════════════════════════════════════ */
+function renderAll(data) {
+  renderSummary(data);
+  renderGraph(data);
+  renderResults(data);
+  renderLog(data);
+}
+
+function renderSummary(data) {
+  $("#mode-chip").innerHTML = `mode <strong>${esc(data.mode)}</strong>`;
+  $("#turn-chip").innerHTML = `turn <strong>${esc(data.turn)}</strong>`;
+  $("#node-chip").innerHTML = `nodes <strong>${esc(data.node_order.length)}</strong>`;
+  const container = $("#strength-chips");
+  container.innerHTML = "";
+  Object.entries(data.strengths || {}).forEach(([key, value]) => {
+    const chip = document.createElement("span");
+    chip.className = "chip bias";
+    chip.innerHTML = `strength ${esc(key)} <strong>${Number(value).toFixed(3)}</strong>`;
+    container.appendChild(chip);
+  });
+  if (data.pair_bidirectional) {
+    const chip = document.createElement("span");
+    chip.className = "chip warn";
+    chip.textContent = "双向：两方向偏置在 tick 前同时计算";
+    container.appendChild(chip);
+  }
+}
+
+function renderGraph(data) {
+  const svg = $("#graph");
+  svg.innerHTML = "";
+  const ns = "http://www.w3.org/2000/svg";
+  const defs = document.createElementNS(ns, "defs");
+  defs.innerHTML = `
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8aa0c0"></path>
+    </marker>
+  `;
+  svg.appendChild(defs);
+
+  const order = data.node_order || [];
+  const isPair = data.mode === "pair";
+  const positions = {};
+  if (isPair) {
+    positions[order[0]] = { x: 190, y: 180 };
+    positions[order[1]] = { x: 570, y: 180 };
+  } else if (order.length === 2) {
+    positions[order[0]] = { x: 210, y: 180 };
+    positions[order[1]] = { x: 550, y: 180 };
+  } else {
+    const cx = 380, cy = 180;
+    const radius = order.length <= 3 ? 125 : 135;
+    order.forEach((id, index) => {
+      const angle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(order.length, 3);
+      positions[id] = {
+        x: cx + Math.cos(angle) * radius,
+        y: cy + Math.sin(angle) * radius * 0.72,
+      };
+    });
+  }
+
+  const edgeList = [];
+  if (isPair) {
+    edgeList.push({
+      source: data.node_order[0], target: data.node_order[1],
+      strength: data.strengths[`${data.node_order[0]}->${data.node_order[1]}`] ?? 1,
+    });
+    if (data.pair_bidirectional) {
+      edgeList.push({
+        source: data.node_order[1], target: data.node_order[0],
+        strength: data.strengths[`${data.node_order[1]}->${data.node_order[0]}`] ?? 1,
+      });
+    }
+  } else {
+    (data.edges || []).forEach((edge) => edgeList.push(edge));
+  }
+
+  const reverseKeys = new Set(edgeList.map((e) => `${e.target}->${e.source}`));
+  edgeList.forEach((edge) => {
+    const from = positions[edge.source];
+    const to = positions[edge.target];
+    if (!from || !to) return;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy) || 1;
+    const ux = dx / length, uy = dy / length;
+    const nx = -uy, ny = ux;
+    const bidirectional = reverseKeys.has(`${edge.source}->${edge.target}`);
+    // 同一条无向通道上的两条有向边使用同一个屏幕侧偏移。
+    // 法向量随方向翻转，因此这里不能按 source < target 再翻符号，
+    // 否则两个箭头会落到同一侧、标签也会重叠。
+    const offset = bidirectional ? 13 : 0;
+    const startX = from.x + ux * 42 + nx * offset;
+    const startY = from.y + uy * 42 + ny * offset;
+    const endX = to.x - ux * 44 + nx * offset;
+    const endY = to.y - uy * 44 + ny * offset;
+
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", startX);
+    line.setAttribute("y1", startY);
+    line.setAttribute("x2", endX);
+    line.setAttribute("y2", endY);
+    line.setAttribute("stroke", "#5a718c");
+    line.setAttribute("stroke-width", "1.6");
+    line.setAttribute("marker-end", "url(#arrow)");
+    svg.appendChild(line);
+
+    const midX = (startX + endX) / 2 + nx * (offset ? offset * 1.3 : -12);
+    const midY = (startY + endY) / 2 + ny * (offset ? offset * 1.3 : -12);
+    const label = document.createElementNS(ns, "text");
+    label.setAttribute("x", midX);
+    label.setAttribute("y", midY);
+    label.setAttribute("fill", "#9fb3c8");
+    label.setAttribute("font-size", "10");
+    label.setAttribute("text-anchor", "middle");
+    label.setAttribute("paint-order", "stroke");
+    label.setAttribute("stroke", "#0d1117");
+    label.setAttribute("stroke-width", "3");
+    label.setAttribute("stroke-linejoin", "round");
+    label.textContent = `${edge.source}→${edge.target} ${Number(edge.strength).toFixed(2)}`;
+    svg.appendChild(label);
+  });
+
+  order.forEach((id) => {
+    const node = data.nodes[id];
+    const pos = positions[id];
+    if (!node || !pos) return;
+    const dominant = DOMINANT_LABELS[node.dominant] || "neutral";
+    const color = DOMINANT_COLORS[dominant] || DOMINANT_COLORS.neutral;
+
+    const halo = document.createElementNS(ns, "circle");
+    halo.setAttribute("cx", pos.x);
+    halo.setAttribute("cy", pos.y);
+    halo.setAttribute("r", "48");
+    halo.setAttribute("fill", color);
+    halo.setAttribute("opacity", "0.12");
+    svg.appendChild(halo);
+
+    const circle = document.createElementNS(ns, "circle");
+    circle.setAttribute("cx", pos.x);
+    circle.setAttribute("cy", pos.y);
+    circle.setAttribute("r", "38");
+    circle.setAttribute("fill", "#141c28");
+    circle.setAttribute("stroke", color);
+    circle.setAttribute("stroke-width", "2.5");
+    svg.appendChild(circle);
+
+    const idText = document.createElementNS(ns, "text");
+    idText.setAttribute("x", pos.x);
+    idText.setAttribute("y", pos.y + 1);
+    idText.setAttribute("fill", "#fff");
+    idText.setAttribute("font-size", "19");
+    idText.setAttribute("font-weight", "800");
+    idText.setAttribute("text-anchor", "middle");
+    idText.setAttribute("dominant-baseline", "middle");
+    idText.textContent = id;
+    svg.appendChild(idText);
+
+    const nameText = document.createElementNS(ns, "text");
+    nameText.setAttribute("x", pos.x);
+    nameText.setAttribute("y", pos.y + 58);
+    nameText.setAttribute("fill", "#d7e0ea");
+    nameText.setAttribute("font-size", "11");
+    nameText.setAttribute("text-anchor", "middle");
+    nameText.setAttribute("paint-order", "stroke");
+    nameText.setAttribute("stroke", "#0d1117");
+    nameText.setAttribute("stroke-width", "3");
+    nameText.textContent = node.name || id;
+    svg.appendChild(nameText);
+
+    const moodText = document.createElementNS(ns, "text");
+    moodText.setAttribute("x", pos.x);
+    moodText.setAttribute("y", pos.y + 73);
+    moodText.setAttribute("fill", color);
+    moodText.setAttribute("font-size", "10");
+    moodText.setAttribute("text-anchor", "middle");
+    moodText.textContent = dominant;
+    svg.appendChild(moodText);
+  });
+}
+
+function biasChips(bias) {
+  const entries = BIAS_META
+    .filter((meta) => Math.abs(Number(bias?.[meta.key] || 0)) > 0.00001)
+    .map((meta) => {
+      const value = Number(bias[meta.key]);
+      return `<span class="bias-chip">${meta.label} ${value > 0 ? "+" : ""}${value.toFixed(4)}</span>`;
+    });
+  return entries.length ? entries.join("") : '<span class="bias-empty">无感染偏置</span>';
+}
+
+function renderResults(data) {
+  const container = $("#node-results");
+  container.innerHTML = "";
+  (data.node_order || []).forEach((id) => {
+    const node = data.nodes[id];
+    const dominant = DOMINANT_LABELS[node.dominant] || "neutral";
+    const color = DOMINANT_COLORS[dominant] || DOMINANT_COLORS.neutral;
+    const card = document.createElement("div");
+    card.className = "card result-card";
+    card.style.setProperty("--neutral", color);
+    card.innerHTML = `
+      <div class="result-head">
+        <span class="id">${esc(id)}</span>
+        <span class="name">${esc(node.name)} <span class="muted">(${esc(node.character)})</span></span>
+        <span class="dominant" style="border:1px solid ${color}55;color:${color}">${esc(dominant)}</span>
+      </div>
+      <div class="bias-list">${biasChips(node.contagion_bias)}</div>
+      <div class="channels"></div>
+    `;
+    const channels = card.querySelector(".channels");
+    CHANNELS.forEach((channel) => {
+      const raw = Number(node.raw[channel] || 0);
+      const delta = Number(node.delta[channel] || 0);
+      const width = Math.max(0, Math.min(100, (raw / 1.5) * 100));
+      const row = document.createElement("div");
+      row.className = "channel-row";
+      row.innerHTML = `
+        <span class="label">${CHANNEL_LABELS[channel]}</span>
+        <span class="bar-track"><span class="bar-fill" style="width:${width}%;background:linear-gradient(90deg, ${color}, ${color}aa)"></span></span>
+        <span class="value">${raw.toFixed(2)}${Math.abs(delta) > 0.0005 ? `<span class="delta">${delta > 0 ? "+" : ""}${delta.toFixed(2)}</span>` : ""}</span>
+      `;
+      channels.appendChild(row);
+    });
+    container.appendChild(card);
+  });
+}
+
+function renderLog(data) {
+  const container = $("#log");
+  const rows = [];
+  (data.node_order || []).forEach((id) => {
+    const node = data.nodes[id];
+    (node.history || []).forEach((point) => {
+      rows.push({ ...point, id, name: node.name });
+    });
+  });
+  rows.sort((a, b) => b.turn - a.turn);
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty">执行 tick 后显示每轮节点状态与感染偏置。</div>';
+    return;
+  }
+  container.innerHTML = rows.slice(0, 14).map((row) => {
+    const bias = BIAS_META
+      .filter((meta) => Math.abs(Number(row.contagion_bias?.[meta.key] || 0)) > 0.00001)
+      .map((meta) => `${meta.label}${Number(row.contagion_bias[meta.key]).toFixed(3)}`)
+      .join(" · ");
+    const dominant = DOMINANT_LABELS[row.dominant] || row.dominant;
+    return `
+      <div class="log-line">
+        <span class="turn">#${esc(row.turn)}</span>
+        <span class="id">${esc(row.id)}</span>
+        <span class="detail">${esc(row.name)} → ${esc(dominant)}${bias ? " · " + esc(bias) : ""}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+/* ═══════════════════════════════════════════════════════════
+   事件绑定与启动
+   ═══════════════════════════════════════════════════════════ */
+function bindEvents() {
+  $("#mode").addEventListener("change", syncModeUi);
+  $("#strength-mode").addEventListener("change", syncModeUi);
+  $("#add-node").addEventListener("click", () => {
+    if (nodes.length >= 6) return;
+    const id = nextNodeId();
+    nodes.push(defaultNode(id, "default"));
+    renderNodes();
+    renderEdges();
+  });
+  $("#add-edge").addEventListener("click", addEdge);
+  $("#run-one").addEventListener("click", () => runTicks(1));
+  $("#run-five").addEventListener("click", () => runTicks(5));
+  $("#reset").addEventListener("click", resetSimulation);
+
+  $$("[data-preset]").forEach((button) => {
+    button.addEventListener("click", () => applyPreset(button.dataset.preset));
+  });
+
+  ["#pair-source", "#pair-target"].forEach((selector) => {
+    $(selector).addEventListener("change", () => {
+      if ($("#pair-source").value === $("#pair-target").value) {
+        const other = nodes.map((n) => n.id).find((id) => id !== $("#pair-source").value);
+        $("#pair-target").value = other || $("#pair-target").value;
+      }
+    });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      runTicks(1);
+    }
+  });
+}
+
+async function loadCharacters() {
+  try {
+    const data = await fetchJSON("/api/characters");
+    if (Array.isArray(data.characters) && data.characters.length) {
+      charList = data.characters;
+    }
+  } catch (_) {
+    /* 使用内置列表 */
+  }
+}
+
+async function init() {
+  bindEvents();
+  await loadCharacters();
+  applyPreset("chain");
+}
+
+init();
+</script>
+</body>
+</html>

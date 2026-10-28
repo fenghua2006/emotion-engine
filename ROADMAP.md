@@ -66,7 +66,7 @@
 - `tick(trace=True)` 返回 `StepTrace` 分阶段快照，不改变计算
 - 28 个 core 测试；旧 41 个测试全部通过（合计 69）
 - 记录两个顺序问题：氛围门控写入过晚、shock 密度采样过早（L3 已修，legacy 保留）
-- 详细契约见 `docs/CORE.md`；完整 L0–L7 安排见 `docs/INCREMENTAL_PLAN.md`
+- 详细契约见 `docs/CORE.md`；完整 L0–L8 安排见 `docs/INCREMENTAL_PLAN.md`
 
 ## 增量开发 L1 ✅ — 六条快通道
 - `fastline.py`：固定人格 / 固定 trust-love / 固定时钟的六通道参考线
@@ -183,12 +183,48 @@
   双向先算双方输入偏置再 tick，顺序无关、无同 tick 反馈环
 - 拒绝同一引擎或共享 `state` / `memory` / `scars` / `tolerance`
 - 感染不写状态、记忆、`Personality`、快照或 MCP；schema 版本不变
-- 98 个 L7 测试（27 v0 + 14 双向 / 强度 + 14 自动关系 + 22 群体网络 + 21 方向关系）；
-  全量 436 tests OK；ruff clean；六套 golden 无 diff
+- 111 个 L7 测试（27 v0 + 14 双向 / 强度 + 14 自动关系 + 22 群体网络 + 21 方向关系 + 13 网页实验台）；
+  全量 455 tests OK；ruff clean；六套 golden 无 diff
 - 演示：`python scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`、
   `python scripts/contagion_network_demo.py`
+- 网页实验台：`python dashboard/server.py` → `http://localhost:9020/contagion`；
+  节点 / 边 / 参数编辑、1 或 5 tick、JEV 文本解析、逐节点偏置与日志
+- 单角色仪表盘持久记忆统一到 `RelationshipMemoryStore`：默认
+  `dashboard/_relationship_memory.db`，按 `(character_id, user_id)` 隔离；
+  `/api/event` 本地模板与 LLM 路径都写关系域记忆；6 个隔离测试
 - 详细设计见 `docs/L7_MULTI_CHARACTER.md`
 - 仍未做：结构化关系历史、群体级归一化、学习型关系模型
+
+## v0.8.1 ✅ — 朋友圈场景（L8 v0）
+- `social.py`：引擎外部的场景编排层，不导入 `engine.py`，不新增 tick 阶段
+- `PeerRelationship`：有向关系，键 `(world_id, source_id, target_id)`；
+  trust / love / familiarity / tension / boundaries / summary / interactions
+- `PeerRelationshipStore`：标准库 SQLite，world 级隔离；仪表盘默认
+  `dashboard/_social_relationships.db`，`--social-db` 可覆盖
+- 边强度 = 方向关系强度 × `(1 - 0.25 × tension)`；tension 越高传播越弱
+- 回合结束按听者 appraisal 更新“听者 → 发言者”；用户发言只推进回合，
+  不改角色间关系
+- 场景引擎状态不持久化，只持久化关系；不写 `Personality`，六套 golden 不变
+- 28 个 L8 测试（15 库内 + 13 仪表盘）；全量 483 tests OK；ruff clean
+- 网页实验台：`python dashboard/server.py` → `http://localhost:9020/scene`；
+  2–4 角色、连续对话、关系表、感染边、逐回合结算
+- 详细设计见 `docs/L8_SOCIAL_SCENE.md`
+- 仍未做：每角色独立 appraisal、学习型关系更新、关系历史、群体级归一化
+
+## v0.8.5 ✅ — 主动联系（L8.5 v0）
+- `proactive.py`：引擎外调度层；不导入 engine / social，不进入 tick
+- `ProactiveConfig`：最小静默、absence window、冷却、每日上限、未回复上限、
+  安静时段、threshold 与七项权重；全部 clamp
+- `ProactiveScheduler`：思念 / 静默 / 亲密 / 信任 / 熟悉 / 紧张 / 未回复
+  合成 urgency；固定门控顺序；只读 assess 与发送后 mark_contact
+- `FriendScene` 集成：`record_turn()` 观察活动，`snapshot()` 增加 `proactive`
+- `/scene` 新增主动联系卡片：检查意愿、自动 / 指定角色发送、候选原因表；
+  发送走一次普通场景回合，不重复 tick，不调用 LLM
+- `POST /api/scene/proactive`：check / send；支持 `now` 回放与 `actor_id`
+- 17 个核心 + 13 个仪表盘 tests（30）；全量 513 tests OK；ruff clean；
+  coverage 88%（branch）；六套 golden 无 diff
+- 详细设计见 `docs/L8_5_PROACTIVE_CONTACT.md`
+- 仍未做：调度状态持久化、后台定时自动发送、LLM 主动台词、逐条已读
 
 ## v0.9 — 角色市场
 - 社区贡献蒸馏配方

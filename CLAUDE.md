@@ -43,11 +43,20 @@ python -m unittest test_l3_5_meta_emotion.py -v
 python -m unittest test_l5_tolerance.py test_l5_1_expression_dashboard.py -v
 python -m unittest test_p0_maintainability.py -v
 python -m unittest test_l6_jev.py test_l6_integration.py test_l6_mcp.py -v
-python -m unittest test_l7_contagion.py test_l7_integration.py -v
+python -m unittest test_l7_contagion.py test_l7_integration.py test_l7_1_bidirectional.py test_l7_2_relationship_model.py test_l7_3_network.py test_l7_4_directional.py test_contagion_dashboard.py -v
 python -m unittest test_l7_1_bidirectional.py test_l7_2_relationship_model.py -v
 python -m unittest test_l7_3_network.py test_l7_4_directional.py -v
 
-# Full suite (436 tests)
+# L8 social scene
+python -m unittest test_l8_scene.py test_scene_dashboard.py -v
+
+# L8.5 proactive contact
+python -m unittest test_l85_proactive.py test_proactive_dashboard.py -v
+
+# Dashboard relation-memory isolation
+python -m unittest test_dashboard_memory.py -v
+
+# Full suite (513 tests)
 python -m unittest discover
 
 # L6 JEV / MCP
@@ -85,6 +94,8 @@ uv run python dashboard/server.py --char furina    # specific character
 uv run python dashboard/server.py --char kokomi
 uv run python dashboard/server.py --port 8080      # custom port
 # → browser: http://localhost:9020
+# → multi-character lab: http://localhost:9020/contagion
+# → friend scene: http://localhost:9020/scene
 ```
 
 ### Non-repo scripts (Desktop)
@@ -96,7 +107,7 @@ uv run python C:\Users\Administrator\Desktop\furina_fresh.py    # Baseline + sce
 
 ## Architecture
 
-Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,725 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Presentation: `expression.py` + `llm_client.py`. Text entry: `jev.py` + `noul.py`. Multi-character contagion: `contagion.py`. MCP wrapper: `mcp_server.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds HTTP server + HTML panel.
+Core dynamics: `core.py` (no memory/tolerance/LLM imports). Atmosphere/scar pure transforms: `atmosphere.py`. Meta-emotion pure layer: `meta_emotion.py`. Composition root: `engine.py` (~1,725 lines). Control layer: `tolerance.py`. Relationship memory: `memory.py`. Presentation: `expression.py` + `llm_client.py`. Text entry: `jev.py` + `noul.py`. Multi-character contagion: `contagion.py`. Social scene orchestration: `social.py`. Proactive contact scheduling: `proactive.py`. MCP wrapper: `mcp_server.py`. Golden/reference harnesses: `fastline.py` + `l1_events.py`, `slowline.py` + `l2_events.py`, `l5_events.py` + `l5line.py`. No package structure yet. `characters/` holds per-character distillations. `dashboard/` holds the HTTP server, single-character panel, L7 multi-character lab, L8 friend scene, and L8.5 proactive controls.
 
 ### L0 boundary
 
@@ -146,7 +157,7 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - Activation is relative to the channel reference: `felt_diff ≥ 0.04` and `raw_excess ≥ 0.03`; `trust` uses `trust_target(love)`, others use `Personality.baseline()`.
 - Neutral default: no profile means no preset “anger→shame”; `MetaEmotionProfile.kind_weights` / `action_bias` are optional character preferences, never written to `Personality`.
 - Not persisted: `MetaEmotionState` is per-tick; profile / enable flags are config and stay out of snapshots.
-- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 98, and the full suite is 436. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
+- 25 tests in `test_l3_5_meta_emotion.py`; L5 adds 38, L5.1 adds 12, L4 adds 27, P0 adds 17, L6 adds 53, L7 adds 111, L8 adds 28, L8.5 adds 30, dashboard relation-memory adds 6, and the full suite is 513. Demo: `characters/meta_emotion_demo.py`. Details: `docs/META_EMOTION.md`.
 
 ### Relationship memory (L4 v0.2)
 
@@ -159,7 +170,9 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `MemoryWriteGate` rejects low-confidence candidates, duplicates cards/open loops (Jaccard ≥ 0.8 over 7 days), allows fact-key supersession, and caps 4 writes per turn. `MemoryService.last_gate_decisions` exposes reasons.
 - `update_relationship_summary()` regenerates a deterministic ≤160-char summary after successful writes; manual summaries survive until new data arrives.
 - `scripts/migrate_legacy_memory.py` migrates `emotion.db` rows idempotently via `raw_ref = legacy:<path>:<id>`; old DB is not deleted.
-- 27 tests in `test_l4_memory_integration.py`; 100 turns stay ≤1200 prompt chars; with/without-prior ablation leaves `Personality` unchanged. Details: `docs/MEMORY_SYSTEM.md`.
+- Dashboard persistence is unified on `RelationshipMemoryStore`: one SQLite file (`dashboard/_relationship_memory.db`, override with `--memory-db`) scoped by `(character_id, user_id)`; `--user-id` defaults to `dashboard`. Unsaved custom characters use `custom:<name>` so two names never share a memory domain. `engine.memory` is now a per-engine in-process `MemoryStore` for flash/long/short working memory, not a cross-character persistent DB.
+- `/api/event` applies the relationship prior and records local-template turns through `MemoryService`; the LLM path delegates both to `respond_llm(relationship_memory=...)`. `/api/state` exposes `memory_scope` and relationship counts.
+- 27 tests in `test_l4_memory_integration.py`; 6 dashboard isolation tests in `test_dashboard_memory.py`; 100 turns stay ≤1200 prompt chars; with/without-prior ablation leaves `Personality` unchanged. Details: `docs/MEMORY_SYSTEM.md`.
 
 ### Tolerance calibration (L5 v0)
 
@@ -209,8 +222,36 @@ Meta-emotion is a **second-order process**: an emotion about a primary emotion (
 - `ContagionPair(source, target, gain=..., cap=...)`: `tick_pair()` ticks source then target; `tick_target()` ticks only B. Constructor rejects the same engine and shared `state` / `memory` / `scars` / `tolerance`; shared `Personality` is allowed because it is read-only.
 - `respond()` / `respond_llm()` forward an optional `contagion_bias`; LLM output still only affects `utterance`.
 - No snapshot / memory schema change (`SNAPSHOT_VERSION == 2`, `MEMORY_SCHEMA_VERSION == 1`); contagion is per-tick input, never persisted or stored as memory.
-- 98 tests: `test_l7_contagion.py` (14) + `test_l7_integration.py` (13) + `test_l7_1_bidirectional.py` (14) + `test_l7_2_relationship_model.py` (14) + `test_l7_3_network.py` (22) + `test_l7_4_directional.py` (21). Demos: `scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`, `scripts/contagion_network_demo.py`. Details: `docs/L7_MULTI_CHARACTER.md`.
+- 111 tests: `test_l7_contagion.py` (14) + `test_l7_integration.py` (13) + `test_l7_1_bidirectional.py` (14) + `test_l7_2_relationship_model.py` (14) + `test_l7_3_network.py` (22) + `test_l7_4_directional.py` (21) + `test_contagion_dashboard.py` (13). Demos: `scripts/multi_character_demo.py [--bidirectional --strength 0.5 --auto-strength]`, `scripts/contagion_network_demo.py`. Web lab: `dashboard/contagion.html` + `/api/contagion/*`. Details: `docs/L7_MULTI_CHARACTER.md`.
 - Deferred: structured relationship history, group-level normalization, learned relationship models.
+
+### L8 social scene (v0)
+
+`social.py` is the scene orchestration layer above isolated engines and `contagion.py`. It persists directed peer relationships and turns one scene turn into bounded contagion biases plus a relationship update. It does not import `engine.py` and never writes `Personality` / `CharacterCore`.
+
+- `PeerRelationship` is directed and keyed by `(world_id, source_id, target_id)`; fields are `trust` [0,1], `love` [0,2], `familiarity` [0,1], `tension` [0,1], `boundaries`, `summary`, `interactions`, `updated_at`. Defaults: trust/love 0.2, familiarity/tension 0.
+- `PeerRelationshipStore` uses stdlib SQLite (`peer_relationships`, `SOCIAL_SCHEMA_VERSION == 1`); `world_id` isolates friend groups. `:memory:` is the library default; the dashboard defaults to `dashboard/_social_relationships.db` (`--social-db`).
+- `FriendScene(actors, ..., gain=0.2, cap=0.08, hop_decay=0.5, max_hops=2)` rejects duplicate actor IDs, the same engine, and shared `state` / `memory` / `scars` / `tolerance`. Shared read-only `Personality` is allowed.
+- Edge strength = `directional_relationship_strength(trust, love, familiarity, boundaries) × (1 - tension_penalty × tension)`, `tension_penalty=0.25`. Higher tension weakens contagion.
+- `biases_for(source_id, source_appraisal, relevance=None)` returns only for actor speakers; `user` returns `{}`. Optional `relevance` gates each target 0–1.
+- `record_turn(source_id, appraisals, boundary_violations=None)` updates listener → speaker for every listener: `valence = 0.5*goal_conduciveness + 0.5*social_evaluation`; trust `+0.02*valence`, love `+0.005*max(0,valence)`, familiarity `+0.004 + 0.006*goal_relevance`, tension `+0.04*max(0,-valence)`; boundary violation adds trust `-0.05` and tension `+0.08`. User turns increment the scene turn but update no peer relationships.
+- `step()` is the full library path (bias → tick all → record). The dashboard deliberately uses `biases_for()` + `respond()` once per actor + `record_turn()` to generate utterances without double ticking.
+- Scene engine emotional state is not persisted; relationships are. `FriendScene` changes no default tick behavior and adds no golden.
+- 28 tests: `test_l8_scene.py` (15) + `test_scene_dashboard.py` (13). Web lab: `dashboard/scene.html` + `/api/scene/*`. Details: `docs/L8_SOCIAL_SCENE.md`.
+- Deferred: per-character appraisals, learned relationship updates, relationship history, group-level normalization.
+
+### L8.5 proactive contact (v0)
+
+`proactive.py` is the deterministic scheduling layer above the scene. It only decides whether an isolated actor should initiate contact; it does not enter `tick()`, write engine state / memory / personality / relationships, or call an LLM at evaluation time.
+
+- `ProactiveConfig`: min silence 1800s, absence window 10800s, cooldown 21600s, max 2/day, max 2 unanswered, quiet 23–7, threshold 0.35, and seven weights. All values clamp.
+- `ProactiveScheduler.assess / evaluate / eligible / choose` are read-only. `urgency = 0.35*longing + 0.25*absence + 0.20*love_norm + 0.10*trust + 0.10*familiarity - 0.25*tension - 0.20*pending`, clamped to [0,1].
+- Gate order is fixed: quiet hours → min silence → cooldown → daily limit → unanswered limit → threshold.
+- `observe_turn()` records activity; a user turn clears every actor's pending count. `mark_contact()` only increments pending / daily counters and timestamps.
+- `FriendScene` owns `self.proactive`; `record_turn()` calls `observe_turn()`, `snapshot()` includes `proactive`, and `set_proactive_config()` replaces rules without resetting counters.
+- `/api/scene/proactive` supports `{"action":"check"}` and `{"action":"send"}` (optional `actor_id`, test-only `now`). Send generates a deterministic template line, runs one normal scene turn, then marks contact — no duplicate tick, no extra memory write.
+- 30 tests: `test_l85_proactive.py` (17) + `test_proactive_dashboard.py` (13). Details: `docs/L8_5_PROACTIVE_CONTACT.md`.
+- Deferred: scheduling-state persistence, background timer / message queue, LLM proactive lines, per-message read receipts, actor-to-actor proactive UI.
 
 ### Core data flow
 
@@ -234,6 +275,10 @@ Appraisal (6-dim cognitive evaluation)
   → respond() or respond_llm() → utterance
 ```
 
+L8 sits outside this loop: `FriendScene.biases_for()` feeds the optional L7 prior,
+and `record_turn()` updates peer relationships after each scene turn. It never
+adds a phase to `tick()`.
+
 `legacy_atmosphere=True` instead writes state, then drifts with zero shock, late-modulates gated,
 applies boundary/interactions, and detects shock — pre-L3 behavior for exact A/B.
 
@@ -252,6 +297,8 @@ applies boundary/interactions, and detects shock — pre-L3 behavior for exact A
 | `RelationshipMemoryStore` / `MemoryService` (`memory.py`) | Relationship-scoped long-term memory: cards, facts, relationship summary, open loops. SQLite FTS5 + CJK bigrams. |
 | `SensitizationStore` | Kindling (Post 1992) + Bayesian threat (MindLAB 2024). Pattern matching on Appraisal. |
 | `ContagionPair` / `ContagionNetwork` / `DirectionalRelationship` (`contagion.py`) | L7 orchestration between isolated engines. Pair: one-way `tick_pair()` / two-way `tick_bidirectional()`; `strength` scales gain; `auto_strength` derives it from trust / love; `directional` uses independent A→B / B→A strengths. Network: directed multi-hop propagation with `hop_decay` / `max_hops`. Never mutates engine personality or state. |
+| `PeerRelationship` / `PeerRelationshipStore` / `SceneActor` / `FriendScene` (`social.py`) | L8 scene layer. Directed peer relationships persisted by `(world_id, source, target)`; `biases_for()` produces bounded L7 biases, `record_turn()` updates listener → speaker relationships and observes proactive activity, `step()` is the full library path. Does not tick twice or write personality. |
+| `ProactiveConfig` / `ProactiveScheduler` (`proactive.py`) | L8.5 scheduling layer. Read-only urgency assessment plus silence / cooldown / daily / unanswered / quiet-hours gates; `mark_contact()` only updates scheduler counters. No engine, memory, personality, or relationship writes. |
 
 ### Channel taxonomy
 
@@ -284,13 +331,20 @@ Two systems coexist:
 
 ### Dashboard
 
-`dashboard/server.py` — stdlib HTTP server. `dashboard/index.html` — Chart.js-based SPA.
+`dashboard/server.py` — stdlib HTTP server. `dashboard/index.html` — Chart.js-based single-character SPA. `dashboard/contagion.html` — L7 multi-character lab (`/contagion`). `dashboard/scene.html` — L8 friend scene + L8.5 proactive controls (`/scene`).
 - `GET /api/state` — full state JSON (10 channels felt+raw, atmosphere, tolerance, dominant, memory stats, scars)
 - `GET /api/history?n=120` — recent data points for the line charts; each point includes `tolerance` (`load`, `capacity`, `zone`, `overload_ratio`, `capacity_by_domain`)
 - Tolerance card draws zone bands + load/capacity + four-domain capacity lines; the emotion chart remains separate.
 - `POST /api/event {"text":"..."}` — feed event text, engine ticks, returns utterance+state
 - `POST /api/switch {"character":"kokomi"}` — hot-swap character at runtime
 - `POST /api/reset` — reset current character to baseline
+- `GET /api/contagion/state` — current multi-character lab state
+- `POST /api/contagion/reset {"config":{...}}` — rebuild isolated engines from config
+- `POST /api/contagion/tick {"config":{...},"appraisals":{...},"steps":1}` — run 1–20 contagion ticks
+- `POST /api/contagion/appraise {"text":"..."}` — JEV text-to-Appraisal preview
+- `GET /api/scene/state` — current friend scene, directed relationships, edges, recent turn log
+- `POST /api/scene/reset {"config":{...},"reset_relationships":false}` — rebuild the scene; optionally clear the current world's relationships
+- `POST /api/scene/turn {"speaker_id":"user","text":"..."}` — run one scene turn; actor speakers propagate biases by relationship strength
 - Character loading: `--char` CLI arg → `importlib.import_module(f"characters.{id}")` → calls `create_{id}()` factory
 - Generic `classify_generic()` fallback when character's appraise function doesn't handle the text
 
@@ -315,7 +369,7 @@ Desktop script, not in repo. Connects engine → VTube Studio (port 8001, expres
 4. **Chinese-first** — comments, variable names in Chinese. README in Chinese. User communicates in Chinese.
 5. **Before touching engine.py** — the user has strong opinions on emotion theory. Discuss design changes before implementing. Present paper evidence.
 6. **API keys are in bridge scripts**, never in engine.py or committed files.
-7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 98 dedicated tests, and all six existing goldens remaining unchanged when contagion is off.
+7. **Golden sets are behavior contracts** — changing `core.py` formulas or L1/L2 reference-line behavior requires regenerating the affected fixture and reviewing every diff. Keep all four L1/L2 legacy/current goldens unchanged unless that path itself changes. New layers must keep them unchanged when disabled. L3 has no golden by design; its contract is pure-function tests, engine A/B, and one exact pre-L3 compatibility value. L3.5 also adds no golden: its contract is trace-key compatibility, bit-identical base state with meta on/off, and 25 dedicated tests. L5 adds two tolerance goldens (`current` multi-domain and frozen `legacy` scalar); `--legacy --check` must always pass, and the legacy fixture is immutable unless the scalar path itself is intentionally changed. L7 has no golden: its contract is default-path key-set compatibility, the 111 dedicated tests, and all six existing goldens remaining unchanged when contagion is off. L8 also has no golden: it only orchestrates isolated engines and persisted relationships; its contract is the 28 dedicated tests plus the unchanged default path and six goldens. L8.5 adds no golden: it only reads state and schedules ordinary scene turns; its contract is the 30 dedicated tests, default-path key-set compatibility, and all six goldens remaining unchanged.
 
 ## Related files (Desktop, not in repo)
 
